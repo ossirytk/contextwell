@@ -17,6 +17,8 @@ The Python layer handles the MCP protocol (FastMCP), embedding models, and the L
 | `forget` | Delete a memory by ID |
 | `list_memories` | Browse stored memories with optional scope and type filters |
 
+Memories can be scoped as `global` (across all projects) or `project` (tied to the current git repository, auto-detected from the working directory).
+
 ---
 
 ## Architecture
@@ -26,8 +28,9 @@ contextwell/
 ├── python/contextwell/
 │   ├── server.py       # FastMCP server and tool definitions
 │   ├── embedder.py     # Sentence-transformers embedding wrapper (lazy load)
-│   ├── store.py        # LanceDB vector store I/O
+│   ├── store.py        # LanceDB vector store I/O (search, scan, store, forget)
 │   ├── schema.py       # Memory dataclass and type literals
+│   ├── project.py      # Git root detection for project-scoped memories
 │   └── _core           # ← compiled from src/lib.rs via PyO3
 ├── src/lib.rs          # Rust: MemoryRecord, search_candidates (RRF)
 └── Cargo.toml
@@ -50,20 +53,30 @@ Register in your MCP client config and use naturally:
 
 > *"Remember that we chose LanceDB over ChromaDB for its hybrid search support"*  
 > *"What decisions have we made about the database layer?"*  
-> *"Recall anything about authentication from last week"*
+> *"Recall anything about authentication from last week"*  
+> *"Remember this as a project decision — scope='project'"*  
+> *"What have we decided in this project so far?"*
 
 Memory is stored at `~/.contextwell/memories/`.
 
 ---
 
-## Optional dependencies
+## Dependencies
 
-The heavy dependencies are not installed by default. Add them when ready:
+Core dependencies (installed with `uv sync`):
+
+| Package | Purpose |
+|---------|---------|
+| `fastmcp` | MCP server framework |
+| `sentence-transformers` | Embedding model (`all-MiniLM-L6-v2`, 384-dim) |
+| `lancedb==0.30.0` | Vector store with scalar index support |
+
+> **Note:** `lancedb` is pinned to `0.30.0` — newer versions may lack a Windows wheel.
+
+Optional, for future hybrid search:
 
 ```powershell
-uv add sentence-transformers   # embedding model (all-MiniLM-L6-v2)
-uv add lancedb                 # vector store
-uv add rank-bm25               # sparse retrieval for hybrid search
+uv add rank-bm25   # sparse retrieval (BM25) for RRF hybrid search
 ```
 
 ---
@@ -90,4 +103,3 @@ cargo fmt
 uv run pytest
 ```
 
-Local MCP memory storage for copilot. Make copilot even better.
