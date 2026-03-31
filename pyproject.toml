@@ -1,0 +1,104 @@
+[project]
+name = "contextwell"
+version = "0.1.0"
+description = "Persistent semantic memory MCP server (Python + Rust/PyO3)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=3.2.0",
+]
+
+[project.scripts]
+contextwell = "contextwell.server:run"
+
+[dependency-groups]
+dev = [
+    "maturin>=1.12.6",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.8",
+]
+
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+python-source = "python"
+module-name = "contextwell._core"
+features = ["pyo3/extension-module"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "F",
+    "E",
+    "W",
+    "I",
+    "N",
+    "UP",
+    "YTT",
+    "ANN",
+    "ASYNC",
+    "S",
+    "FBT",
+    "B",
+    "A",
+    "COM",
+    "C4",
+    "DTZ",
+    "EM",
+    "EXE",
+    "FA",
+    "ISC",
+    "ICN",
+    "LOG",
+    "G",
+    "INP",
+    "PIE",
+    "T20",
+    "PYI",
+    "Q",
+    "RSE",
+    "RET",
+    "SLF",
+    "SLOT",
+    "SIM",
+    "TID",
+    "TCH",
+    "INT",
+    "ARG",
+    "PTH",
+    "PD",
+    "PGH",
+    "PL",
+    "TRY",
+    "FLY",
+    "NPY",
+    "PERF",
+    "FURB",
+    "RUF",
+]
+ignore = ["FBT001", "S603", "G004", "S607", "COM812"]
+unfixable = [
+    # Don't touch unused imports
+    "F401",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "ANN"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.coverage.run]
+source = ["contextwell"]
+omit = ["tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+skip_empty = true
+show_missing = true
+
