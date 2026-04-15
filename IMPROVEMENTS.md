@@ -52,7 +52,7 @@ Before storing a new memory, check for near-identical existing memories.
 
 ---
 
-## 5. Hybrid Search (BM25 + Vector + RRF)
+## ~~5. Hybrid Search (BM25 + Vector + RRF)~~ ✅
 
 Wire up the existing `search_candidates` RRF function in `_core` with a BM25 sparse index.
 

@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 
 import contextwell.store as store_module
+from contextwell.bm25 import bm25_search
 from contextwell.project import detect_project_id
 from contextwell.schema import Memory
 from contextwell.store import check_duplicate, forget, recall, scan, store, update
@@ -261,3 +262,78 @@ def test_check_duplicate_threshold_boundary(tmp_path, monkeypatch) -> None:
     # threshold=0.0 means any distance < 1.0 matches — identical vector must match
     result = check_duplicate(_test_embed(m.content), threshold=0.0)
     assert result is not None
+
+
+# --- Item 5: Hybrid search (BM25 + Vector + RRF) ---
+
+
+def test_bm25_search_ranks_by_keyword() -> None:
+    """bm25_search returns IDs ranked with keyword-matching docs first."""
+
+    rows = [
+        {"id": "a", "content": "JWT is used for authentication and authorization"},
+        {"id": "b", "content": "bcrypt hashes passwords securely"},
+        {"id": "c", "content": "JWT tokens expire after a configurable period"},
+        {"id": "d", "content": "Use environment variables for secrets"},
+        {"id": "e", "content": "Redis caches session data"},
+    ]
+    results = bm25_search(rows, "JWT token authentication", k=3)
+    assert "a" in results
+    assert "c" in results
+
+
+def test_bm25_search_empty_rows() -> None:
+    """bm25_search returns [] for empty corpus."""
+
+    assert bm25_search([], "anything", k=5) == []
+
+
+def test_bm25_search_blank_query() -> None:
+    """bm25_search returns [] for blank query."""
+
+    rows = [{"id": "x", "content": "some content"}]
+    assert bm25_search(rows, "   ", k=5) == []
+
+
+def test_bm25_search_respects_k() -> None:
+    """bm25_search returns at most k results."""
+
+    rows = [{"id": str(i), "content": f"document {i} about authentication"} for i in range(10)]
+    results = bm25_search(rows, "authentication", k=3)
+    assert len(results) <= 3
+
+
+def test_hybrid_recall_returns_results(tmp_path, monkeypatch) -> None:
+    """Hybrid recall returns results when CONTEXTWELL_HYBRID=1."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    monkeypatch.setenv("CONTEXTWELL_HYBRID", "1")
+
+    for text in [
+        "JWT is used for auth",
+        "bcrypt hashes passwords",
+        "use environment variables for secrets",
+        "Redis caches data",
+        "deploy to production on Fridays",
+    ]:
+        m = Memory(content=text, type="fact", scope="global")
+        m.embedding = _test_embed(text)
+        store(m)
+
+    embedding = _test_embed("JWT token authentication")
+    results = recall(embedding, query="JWT token authentication", k=3)
+    assert len(results) > 0
+    assert all("content" in r for r in results)
+
+
+def test_hybrid_recall_falls_back_without_env(tmp_path, monkeypatch) -> None:
+    """Without CONTEXTWELL_HYBRID=1, recall uses pure vector search."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    monkeypatch.delenv("CONTEXTWELL_HYBRID", raising=False)
+
+    m = Memory(content="Pure vector test", type="fact", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    results = recall(_test_embed("Pure vector test"), query="Pure vector test", k=5)
+    assert len(results) == 1
+    assert results[0]["content"] == "Pure vector test"

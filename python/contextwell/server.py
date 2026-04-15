@@ -119,7 +119,7 @@ def recall(
 
     embedding = embed(query)
     project_id = _project_id_for_scope(scope) or ""
-    return _recall(embedding, scope=scope, memory_type=type, project_id=project_id or "", tags=tags, k=k)
+    return _recall(embedding, query=query, scope=scope, memory_type=type, project_id=project_id or "", tags=tags, k=k)
 
 
 @mcp.tool

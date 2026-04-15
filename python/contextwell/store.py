@@ -117,24 +117,70 @@ def store(memory: Memory) -> str:
     return memory.id
 
 
+def _recall_hybrid(
+    table: Table,
+    embedding: list[float],
+    query: str,
+    clauses: list[str],
+    k: int,
+) -> list[dict]:
+    """Vector + BM25 search fused with RRF. Falls back to pure vector on ImportError."""
+    try:
+        from contextwell._core import search_candidates  # noqa: PLC0415
+        from contextwell.bm25 import bm25_search  # noqa: PLC0415
+    except ImportError:
+        q = table.search(embedding).limit(k)
+        if clauses:
+            q = q.where(" AND ".join(clauses))
+        return [_clean(row) for row in q.to_list()]
+
+    pool_limit = max(k * 10, 100)
+    pool_q = table.search().limit(pool_limit)
+    if clauses:
+        pool_q = pool_q.where(" AND ".join(clauses))
+    pool_rows = [_clean(row) for row in pool_q.to_list()]
+    id_to_row = {row["id"]: row for row in pool_rows}
+
+    candidate_k = min(k * 3, pool_limit)
+
+    dense_q = table.search(embedding).limit(candidate_k)
+    if clauses:
+        dense_q = dense_q.where(" AND ".join(clauses))
+    dense_ids = [row["id"] for row in dense_q.to_list()]
+
+    sparse_ids = bm25_search(pool_rows, query, candidate_k)
+
+    fused = search_candidates(dense_ids, sparse_ids)
+    return [id_to_row[mid] for mid, _ in fused[:k] if mid in id_to_row]
+
+
 def recall(
     embedding: list[float],
+    query: str = "",
     scope: str = "",
     memory_type: str = "",
     project_id: str = "",
     tags: list[str] | None = None,
     k: int = 10,
 ) -> list[dict]:
-    """Vector search with optional metadata filters. Returns top-k results."""
-    table = _get_table()
+    """Vector search with optional metadata filters. Returns top-k results.
 
+    When the ``CONTEXTWELL_HYBRID`` environment variable is set to ``"1"``
+    and *query* is provided, BM25 sparse retrieval is fused with vector
+    search via Reciprocal Rank Fusion (requires the ``rank-bm25`` package).
+    """
+    import os  # noqa: PLC0415
+
+    table = _get_table()
     clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id, tags=tags)
 
-    query = table.search(embedding).limit(k)
-    if clauses:
-        query = query.where(" AND ".join(clauses))
+    if os.getenv("CONTEXTWELL_HYBRID") == "1" and query:
+        return _recall_hybrid(table, embedding, query, clauses, k)
 
-    return [_clean(row) for row in query.to_list()]
+    q = table.search(embedding).limit(k)
+    if clauses:
+        q = q.where(" AND ".join(clauses))
+    return [_clean(row) for row in q.to_list()]
 
 
 def scan(
