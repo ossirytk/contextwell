@@ -27,7 +27,12 @@ def _ensure_scalar_indexes(table: Table) -> None:
             table.create_scalar_index(column)
 
 
-def _where_clauses(scope: str = "", memory_type: str = "", project_id: str = "") -> list[str]:
+def _where_clauses(
+    scope: str = "",
+    memory_type: str = "",
+    project_id: str = "",
+    tags: list[str] | None = None,
+) -> list[str]:
     clauses = []
     if scope:
         clauses.append(f"scope = '{_escape_literal(scope)}'")
@@ -35,6 +40,10 @@ def _where_clauses(scope: str = "", memory_type: str = "", project_id: str = "")
         clauses.append(f"type = '{_escape_literal(memory_type)}'")
     if project_id:
         clauses.append(f"project_id = '{_escape_literal(project_id)}'")
+    if tags:
+        # Any-match: memory must contain at least one of the requested tags.
+        tag_conditions = " OR ".join(f"array_has(tags, '{_escape_literal(t)}')" for t in tags)
+        clauses.append(f"({tag_conditions})")
     return clauses
 
 
@@ -105,12 +114,13 @@ def recall(
     scope: str = "",
     memory_type: str = "",
     project_id: str = "",
+    tags: list[str] | None = None,
     k: int = 10,
 ) -> list[dict]:
     """Vector search with optional metadata filters. Returns top-k results."""
     table = _get_table()
 
-    clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id)
+    clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id, tags=tags)
 
     query = table.search(embedding).limit(k)
     if clauses:
@@ -123,12 +133,13 @@ def scan(
     scope: str = "",
     memory_type: str = "",
     project_id: str = "",
+    tags: list[str] | None = None,
     limit: int = 50,
 ) -> list[dict]:
     """Full-table scan with optional metadata filters. No vector required."""
     table = _get_table()
 
-    clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id)
+    clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id, tags=tags)
 
     query = table.search().limit(limit)
     if clauses:

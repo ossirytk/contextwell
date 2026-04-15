@@ -20,7 +20,7 @@ Parse a markdown file and store its sections as individual memories. Designed to
 
 ---
 
-## 2. Tags Filtering in `recall` and `list_memories`
+## ~~2. Tags Filtering in `recall` and `list_memories`~~ ✅
 
 Tags are stored today but have zero query power. Add a `tags` filter parameter to both `recall` and `list_memories` so the model can ask for memories with a specific label.
 

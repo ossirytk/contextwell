@@ -56,3 +56,75 @@ def test_embedding_store_integration(tmp_path, monkeypatch) -> None:
     pid = detect_project_id(str(Path(__file__).parent))
     assert pid is not None
     assert len(pid) == 16
+
+
+def test_tags_filter_scan(tmp_path, monkeypatch) -> None:
+    """list_memories (scan) returns only memories matching at least one tag."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m1 = Memory(content="Auth uses JWT tokens", type="decision", scope="global", tags=["auth", "security"])
+    m1.embedding = _test_embed(m1.content)
+    store(m1)
+
+    m2 = Memory(content="Use Postgres for persistence", type="decision", scope="global", tags=["db", "postgres"])
+    m2.embedding = _test_embed(m2.content)
+    store(m2)
+
+    m3 = Memory(content="Rate limiting on auth endpoints", type="fact", scope="global", tags=["auth", "api"])
+    m3.embedding = _test_embed(m3.content)
+    store(m3)
+
+    # Single tag — should match m1 and m3 only
+    rows = scan(tags=["auth"], limit=10)
+    ids = {r["id"] for r in rows}
+    assert m1.id in ids
+    assert m3.id in ids
+    assert m2.id not in ids
+
+    # Multi-tag any-match — 'db' matches m2, 'security' matches m1
+    rows = scan(tags=["db", "security"], limit=10)
+    ids = {r["id"] for r in rows}
+    assert m1.id in ids
+    assert m2.id in ids
+    assert m3.id not in ids
+
+    # Tag with no matches — empty result
+    rows = scan(tags=["nonexistent"], limit=10)
+    assert rows == []
+
+
+def test_tags_filter_recall(tmp_path, monkeypatch) -> None:
+    """recall (vector search) respects the tags filter."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m1 = Memory(content="Auth uses JWT tokens", type="decision", scope="global", tags=["auth"])
+    m1.embedding = _test_embed(m1.content)
+    store(m1)
+
+    m2 = Memory(content="Auth uses session cookies as fallback", type="decision", scope="global", tags=["db"])
+    m2.embedding = _test_embed(m2.content)
+    store(m2)
+
+    # Both are semantically close to the query, but the tag filter restricts to 'auth'
+    results = recall(_test_embed("authentication approach"), tags=["auth"], k=5)
+    ids = {r["id"] for r in results}
+    assert m1.id in ids
+    assert m2.id not in ids
+
+
+def test_tags_filter_combined_with_type(tmp_path, monkeypatch) -> None:
+    """Tags filter composes correctly with type filter."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m1 = Memory(content="Use bcrypt for passwords", type="decision", scope="global", tags=["auth"])
+    m1.embedding = _test_embed(m1.content)
+    store(m1)
+
+    m2 = Memory(content="Bcrypt snippet", type="code", scope="global", tags=["auth"])
+    m2.embedding = _test_embed(m2.content)
+    store(m2)
+
+    rows = scan(memory_type="decision", tags=["auth"], limit=10)
+    ids = {r["id"] for r in rows}
+    assert m1.id in ids
+    assert m2.id not in ids  # excluded by type filter

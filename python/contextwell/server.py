@@ -86,6 +86,7 @@ def recall(
     query: str,
     scope: Literal["project", "global", ""] = "",
     type: MemoryType | Literal[""] = "",  # noqa: A002
+    tags: list[str] | None = None,
     k: int = 10,
 ) -> list[dict]:
     """Search memories by meaning using semantic similarity.
@@ -95,6 +96,7 @@ def recall(
         scope: Filter by scope ('project' or 'global'). Empty means all.
                For 'project' scope, git root is auto-detected from server CWD.
         type: Filter by memory type. Empty means all types.
+        tags: Only return memories that have at least one of these tags.
         k: Maximum number of results to return.
     """
     from contextwell.embedder import embed  # noqa: PLC0415
@@ -102,7 +104,7 @@ def recall(
 
     embedding = embed(query)
     project_id = _project_id_for_scope(scope) or ""
-    return _recall(embedding, scope=scope, memory_type=type, project_id=project_id or "", k=k)
+    return _recall(embedding, scope=scope, memory_type=type, project_id=project_id or "", tags=tags, k=k)
 
 
 @mcp.tool
@@ -124,6 +126,7 @@ def forget(memory_id: str) -> str:
 def list_memories(
     scope: MemoryScope | Literal[""] = "",
     type: MemoryType | Literal[""] = "",  # noqa: A002
+    tags: list[str] | None = None,
     limit: int = 50,
 ) -> list[dict]:
     """Browse stored memories with optional filters.
@@ -132,12 +135,13 @@ def list_memories(
         scope: Filter by scope. Empty means all.
                For 'project' scope, git root is auto-detected from server CWD.
         type: Filter by memory type. Empty means all.
+        tags: Only return memories that have at least one of these tags.
         limit: Maximum number of results.
     """
     from contextwell.store import scan  # noqa: PLC0415
 
     project_id = _project_id_for_scope(scope) or ""
-    return scan(scope=scope, memory_type=type, project_id=project_id or "", limit=limit)
+    return scan(scope=scope, memory_type=type, project_id=project_id or "", tags=tags, limit=limit)
 
 
 @mcp.tool
