@@ -22,6 +22,21 @@ mcp = FastMCP(
 )
 
 
+def _project_id_for_scope(scope: str, cwd: str | None = None, *, allow_source_hint: bool = False) -> str | None:
+    """Resolve project_id for project scope, or None for non-project scopes."""
+    if scope != "project":
+        return None
+    from contextwell.project import detect_project_id  # noqa: PLC0415
+
+    project_id = detect_project_id(cwd)
+    if not project_id:
+        msg = "Unable to detect project context for scope='project'. Run from a git repository."
+        if allow_source_hint:
+            msg += " You can also pass source='cwd:<path>'."
+        raise ValueError(msg)
+    return project_id
+
+
 @mcp.tool
 def remember(
     content: str,
@@ -43,7 +58,6 @@ def remember(
                 'cwd:D:/myproject'. Otherwise the server CWD is used.
     """
     from contextwell.embedder import embed  # noqa: PLC0415
-    from contextwell.project import detect_project_id  # noqa: PLC0415
     from contextwell.store import store  # noqa: PLC0415
 
     cwd: str | None = None
@@ -52,10 +66,7 @@ def remember(
         cwd, _, rest = source[4:].partition("|")
         clean_source = rest or None
 
-    project_id = detect_project_id(cwd) if scope == "project" else None
-    if scope == "project" and not project_id:
-        msg = "Unable to detect project context for scope='project'."
-        raise ValueError(msg)
+    project_id = _project_id_for_scope(scope, cwd, allow_source_hint=True)
     memory = Memory(
         content=content,
         type=type,
@@ -87,14 +98,10 @@ def recall(
         k: Maximum number of results to return.
     """
     from contextwell.embedder import embed  # noqa: PLC0415
-    from contextwell.project import detect_project_id  # noqa: PLC0415
     from contextwell.store import recall as _recall  # noqa: PLC0415
 
     embedding = embed(query)
-    project_id = detect_project_id() if scope == "project" else ""
-    if scope == "project" and not project_id:
-        msg = "Unable to detect project context for scope='project'."
-        raise ValueError(msg)
+    project_id = _project_id_for_scope(scope) or ""
     return _recall(embedding, scope=scope, memory_type=type, project_id=project_id or "", k=k)
 
 
@@ -127,13 +134,9 @@ def list_memories(
         type: Filter by memory type. Empty means all.
         limit: Maximum number of results.
     """
-    from contextwell.project import detect_project_id  # noqa: PLC0415
     from contextwell.store import scan  # noqa: PLC0415
 
-    project_id = detect_project_id() if scope == "project" else ""
-    if scope == "project" and not project_id:
-        msg = "Unable to detect project context for scope='project'."
-        raise ValueError(msg)
+    project_id = _project_id_for_scope(scope) or ""
     return scan(scope=scope, memory_type=type, project_id=project_id or "", limit=limit)
 
 

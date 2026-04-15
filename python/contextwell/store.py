@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from lancedb.table import Table
+
     from contextwell.schema import Memory
 
 DB_PATH = Path.home() / ".contextwell" / "memories"
@@ -13,10 +15,17 @@ _EMBEDDING_DIM = 384
 
 
 def _escape_literal(value: str) -> str:
-    return value.replace("'", "''")
+    """Escape quote and control chars for LanceDB filter literals."""
+    return (
+        value.replace("'", "''")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
 
 
-def _ensure_scalar_indexes(table) -> None:  # noqa: ANN001
+def _ensure_scalar_indexes(table: Table) -> None:
+    """Create missing scalar indexes used by metadata filters."""
     indexed_columns = {column for index in table.list_indices() for column in index.columns}
     for column in ("scope", "type", "project_id"):
         if column not in indexed_columns:

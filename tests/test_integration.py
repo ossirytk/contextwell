@@ -12,10 +12,13 @@ from contextwell.project import detect_project_id
 from contextwell.schema import Memory
 from contextwell.store import forget, recall, scan, store
 
+_EMBEDDING_DIM = 384
 
-def _fake_embed(text: str) -> list[float]:
+
+def _test_embed(text: str) -> list[float]:
+    """Return deterministic normalized test vectors to avoid model downloads in tests."""
     raw = hashlib.sha256(text.encode("utf-8")).digest()
-    vector = [((raw[i % len(raw)] / 255.0) - 0.5) for i in range(384)]
+    vector = [((raw[i % len(raw)] / 255.0) - 0.5) for i in range(_EMBEDDING_DIM)]
     norm = math.sqrt(sum(value * value for value in vector)) or 1.0
     return [value / norm for value in vector]
 
@@ -24,20 +27,20 @@ def test_embedding_store_integration(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CONTEXTWELL_TEST", "1")
     monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
 
-    vec = _fake_embed("We chose LanceDB for hybrid search support")
-    assert len(vec) == 384
+    vec = _test_embed("We chose LanceDB for hybrid search support")
+    assert len(vec) == _EMBEDDING_DIM
     assert abs(sum(value**2 for value in vec) - 1.0) < 0.01
 
     m = Memory(content="We chose LanceDB over ChromaDB for hybrid search support", type="decision", scope="global")
-    m.embedding = _fake_embed(m.content)
+    m.embedding = _test_embed(m.content)
     mid = store(m)
     assert len(mid) == 36
 
     m2 = Memory(content="Use all-MiniLM-L6-v2 as the default embedding model", type="decision", scope="global")
-    m2.embedding = _fake_embed(m2.content)
+    m2.embedding = _test_embed(m2.content)
     store(m2)
 
-    results = recall(_fake_embed("database choice"), k=2)
+    results = recall(_test_embed("database choice"), k=2)
     assert results
     assert "_distance" not in results[0]
     assert "embedding" not in results[0]
