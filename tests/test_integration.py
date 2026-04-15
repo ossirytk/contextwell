@@ -201,6 +201,25 @@ def test_update_partial_id(tmp_path, monkeypatch) -> None:
     assert "found-by-prefix" in rows[0]["tags"]
 
 
+def test_update_partial_id_ambiguous(tmp_path, monkeypatch) -> None:
+    """update() returns False when a short prefix matches multiple IDs."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m1 = Memory(content="first", type="fact", scope="global")
+    m1.embedding = _test_embed(m1.content)
+    m1.id = "aaaaaaaa-0000-0000-0000-000000000001"
+    store(m1)
+
+    m2 = Memory(content="second", type="fact", scope="global")
+    m2.embedding = _test_embed(m2.content)
+    m2.id = "aaaaaaaa-0000-0000-0000-000000000002"
+    store(m2)
+
+    assert not update("aaaaaaaa", tags=["should-not-apply"])
+    rows = scan(limit=10)
+    assert all("should-not-apply" not in row["tags"] for row in rows)
+
+
 def test_update_not_found(tmp_path, monkeypatch) -> None:
     """update() returns False when no memory matches the given ID."""
     monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
@@ -360,11 +379,31 @@ def test_hybrid_recall_falls_back_without_env(tmp_path, monkeypatch) -> None:
     assert results[0]["content"] == "Pure vector test"
 
 
+def test_hybrid_recall_falls_back_when_rank_bm25_missing(tmp_path, monkeypatch) -> None:
+    """Hybrid recall falls back to dense-only when BM25 dependency is unavailable."""
+    import contextwell.bm25 as bm25_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    monkeypatch.setenv("CONTEXTWELL_HYBRID", "1")
+
+    m = Memory(content="fallback test", type="fact", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    def _raise_import_error(_rows: list[dict], _query: str, _k: int) -> list[str]:
+        raise ImportError
+
+    monkeypatch.setattr(bm25_module, "bm25_search", _raise_import_error)
+    results = recall(_test_embed("fallback test"), query="fallback test", k=5)
+    assert len(results) == 1
+    assert results[0]["id"] == m.id
+
+
 # --- Item 6: Configurable embedding model ---
 
 
 def test_model_name_default(monkeypatch) -> None:
-    """Default model name is all-MiniLM-L6-v2 when no env var is set."""
+    """Default model name is BAAI/bge-small-en-v1.5 when no env var is set."""
     monkeypatch.delenv("CONTEXTWELL_EMBED_MODEL", raising=False)
     monkeypatch.delenv("CONTEXTWELL_EMBED_PROVIDER", raising=False)
     assert _model_name() == "BAAI/bge-small-en-v1.5"
@@ -466,6 +505,22 @@ def test_until_filter_excludes_newer(tmp_path, monkeypatch) -> None:
     ids = {r["id"] for r in results}
     assert old.id in ids
     assert new.id not in ids
+
+
+def test_until_date_only_includes_same_day(tmp_path, monkeypatch) -> None:
+    """Date-only until bound includes results from that entire day."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="same day", type="fact", scope="global")
+    m.embedding = _test_embed("same day")
+    m.created_at = datetime(2025, 3, 31, 12, 0, 0, tzinfo=UTC)
+    store(m)
+
+    results = scan(until="2025-03-31")
+    ids = {r["id"] for r in results}
+    assert m.id in ids
 
 
 def test_since_until_range(tmp_path, monkeypatch) -> None:
@@ -905,6 +960,35 @@ def test_recall_with_rerank(tmp_path, monkeypatch) -> None:
     assert len(results) == 3
 
 
+def test_recall_dedup_after_rerank(tmp_path, monkeypatch) -> None:
+    """When rerank=True, chunk-group dedup keeps the reranked-best chunk."""
+    import contextwell.reranker as reranker_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    group = "group-1"
+    base_emb = _test_embed("chunk topic")
+    first = Memory(content="less relevant chunk", type="fact", scope="global")
+    first.embedding = base_emb
+    first.chunk_of = group
+    store(first)
+
+    second = Memory(content="preferred chunk", type="fact", scope="global")
+    second.embedding = base_emb
+    second.chunk_of = group
+    store(second)
+
+    def _prefer_keyword(_query: str, rows: list[dict], k: int) -> list[dict]:
+        ranked = sorted(rows, key=lambda row: "preferred" not in str(row.get("content", "")))
+        return ranked[:k]
+
+    monkeypatch.setattr(reranker_module, "rerank", _prefer_keyword)
+    results = recall(base_emb, query="chunk topic", scope="global", k=2, rerank=True)
+    grouped = [row for row in results if row.get("chunk_of") == group]
+    assert len(grouped) == 1
+    assert grouped[0]["content"] == "preferred chunk"
+
+
 def test_recall_rerank_false_unchanged(tmp_path, monkeypatch) -> None:
     """recall(rerank=False) does not invoke the reranker."""
     import contextwell.reranker as reranker_module  # noqa: PLC0415
@@ -974,6 +1058,16 @@ def test_chunk_text_overlap() -> None:
     assert last_words_of_first == first_words_of_second
 
 
+def test_chunk_text_invalid_params() -> None:
+    """chunk_text validates max_words and overlap constraints."""
+    from contextwell.chunker import chunk_text  # noqa: PLC0415
+
+    with pytest.raises(ValueError, match="max_words"):
+        chunk_text("x y z", max_words=0, overlap=0)
+    with pytest.raises(ValueError, match="overlap"):
+        chunk_text("x y z", max_words=2, overlap=2)
+
+
 def test_remember_chunks_long_content(tmp_path, monkeypatch) -> None:
     """remember() auto-chunks long content when CONTEXTWELL_CHUNKING=1."""
     import contextwell.server as server_module  # noqa: PLC0415
@@ -993,6 +1087,29 @@ def test_remember_chunks_long_content(tmp_path, monkeypatch) -> None:
     # All chunks should share the same chunk_of group ID
     group_ids = {r["chunk_of"] for r in rows if r.get("chunk_of")}
     assert len(group_ids) == 1
+
+
+def test_remember_chunks_checks_duplicates(tmp_path, monkeypatch) -> None:
+    """remember() applies duplicate checks before storing chunk groups."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    monkeypatch.setenv("CONTEXTWELL_CHUNKING", "1")
+    monkeypatch.setenv("CONTEXTWELL_CHUNK_SIZE", "10")
+    monkeypatch.setenv("CONTEXTWELL_CHUNK_OVERLAP", "2")
+    _patch_embed_batch(monkeypatch)
+
+    existing = Memory(content="already known chunk", type="fact", scope="global")
+    existing.embedding = _test_embed(existing.content)
+    store(existing)
+
+    def _embed_batch_with_duplicate(chunks: list[str]) -> list[list[float]]:
+        return [_test_embed(existing.content) if i == 0 else _test_embed(text) for i, text in enumerate(chunks)]
+
+    monkeypatch.setattr(embedder_module, "embed_batch", _embed_batch_with_duplicate)
+    result = server_module.remember(" ".join(f"word{i}" for i in range(30)), type="fact", scope="global")
+    assert "Near-duplicate detected" in result
+    assert len(scan(scope="global")) == 1
 
 
 def test_remember_no_chunk_short(tmp_path, monkeypatch) -> None:
@@ -1107,3 +1224,87 @@ def test_memory_stats_tool_returns_dict(tmp_path, monkeypatch) -> None:
     assert result["total"] == 1
     assert "by_type" in result
     assert "store_bytes" in result
+
+
+def test_forget_partial_id(tmp_path, monkeypatch) -> None:
+    """forget() supports deleting by unique 8-char prefix."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    m = Memory(content="delete me", type="fact", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    assert forget(m.id[:8])
+    assert scan(limit=10) == []
+
+
+def test_forget_partial_id_ambiguous(tmp_path, monkeypatch) -> None:
+    """forget() returns False when an 8-char prefix is ambiguous."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m1 = Memory(content="first", type="fact", scope="global")
+    m1.embedding = _test_embed(m1.content)
+    m1.id = "bbbbbbbb-0000-0000-0000-000000000001"
+    store(m1)
+    m2 = Memory(content="second", type="fact", scope="global")
+    m2.embedding = _test_embed(m2.content)
+    m2.id = "bbbbbbbb-0000-0000-0000-000000000002"
+    store(m2)
+
+    assert not forget("bbbbbbbb")
+    assert len(scan(limit=10)) == 2
+
+
+def test_parent_ids_column_migration(tmp_path, monkeypatch) -> None:
+    """Opening an older table adds parent_ids with an empty-list default."""
+    import lancedb  # noqa: PLC0415
+    import pyarrow as pa  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    db = lancedb.connect(str(tmp_path / "memories"))
+    dim = _embedding_dim()
+    schema = pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("content", pa.string()),
+            pa.field("type", pa.string()),
+            pa.field("scope", pa.string()),
+            pa.field("project_id", pa.string()),
+            pa.field("tags", pa.list_(pa.string())),
+            pa.field("source", pa.string()),
+            pa.field("created_at", pa.string()),
+            pa.field("updated_at", pa.string()),
+            pa.field("chunk_of", pa.string()),
+            pa.field("embedding", pa.list_(pa.float32(), dim)),
+        ]
+    )
+    table = db.create_table("memories", schema=schema)
+    table.add(
+        [
+            {
+                "id": "legacy-id",
+                "content": "legacy row",
+                "type": "fact",
+                "scope": "global",
+                "project_id": "",
+                "tags": [],
+                "source": "",
+                "created_at": "2025-01-01T00:00:00+00:00",
+                "updated_at": "",
+                "chunk_of": "",
+                "embedding": _test_embed("legacy row"),
+            }
+        ]
+    )
+
+    _store_mem("migration test")
+    rows = scan(limit=10)
+    assert all(row["parent_ids"] == [] for row in rows)
+
+
+def test_export_filter_fields_uses_list_defaults() -> None:
+    """Export field filtering preserves list types for list-valued fields."""
+    from contextwell.export import _filter_fields  # noqa: PLC0415
+
+    row = _filter_fields({"id": "x", "content": "c"})
+    assert row["tags"] == []
+    assert row["parent_ids"] == []

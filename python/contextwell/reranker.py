@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 _DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+_LOG = logging.getLogger(__name__)
 
 _reranker = None  # module-level cache
 
@@ -41,9 +43,14 @@ def rerank(query: str, rows: list[dict], k: int) -> list[dict]:
         return rows[:k]
     try:
         model = _get_reranker()
+    except (ImportError, OSError, RuntimeError, ValueError):
+        return rows[:k]
+    try:
         pairs = [(query, str(row.get("content", ""))) for row in rows]
-        scores: list[float] = model.predict(pairs).tolist()
+        predictions = model.predict(pairs)
+        scores: list[float] = predictions.tolist() if hasattr(predictions, "tolist") else list(predictions)
         ranked = sorted(zip(rows, scores, strict=True), key=lambda x: x[1], reverse=True)
         return [row for row, _ in ranked[:k]]
     except Exception:
+        _LOG.exception("Unexpected reranker failure; falling back to original ranking.")
         return rows[:k]

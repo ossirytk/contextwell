@@ -18,11 +18,12 @@ _EXPORT_FIELDS = (
     "parent_ids",
     "chunk_of",
 )
+_LIST_EXPORT_FIELDS = {"tags", "parent_ids"}
 
 
 def _filter_fields(row: dict) -> dict:
     """Return only the exportable fields from a raw store row."""
-    return {k: row.get(k, "") for k in _EXPORT_FIELDS}
+    return {k: row.get(k, [] if k in _LIST_EXPORT_FIELDS else "") for k in _EXPORT_FIELDS}
 
 
 def _group_by_type(rows: list[dict]) -> dict[str, list[dict]]:

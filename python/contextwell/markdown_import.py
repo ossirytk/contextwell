@@ -18,7 +18,7 @@ _CHUNK_OVERLAP = 100
 
 # Regex patterns
 _FRONT_MATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
-_HEADER_RE = re.compile(r"^(#{1,3})\s+(.+)$", re.MULTILINE)
+_HEADER_RE = re.compile(r"^(#{2,3})\s+(.+)$", re.MULTILINE)
 
 # Map section title keywords → memory type
 _TYPE_HINTS: list[tuple[re.Pattern[str], str]] = [
@@ -72,13 +72,21 @@ def _infer_type(title: str, type_hint: str) -> str:
     return type_hint
 
 
-def _paragraph_chunks(text: str, chunk_size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP) -> list[str]:
+def _paragraph_chunks(  # noqa: PLR0912
+    text: str, chunk_size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP
+) -> list[str]:
     """Split *text* into overlapping paragraph-aligned chunks.
 
     Tries to break on paragraph boundaries (blank lines). If a paragraph is
     longer than *chunk_size*, it is split at the nearest whitespace.
     """
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if chunk_size < 1:
+        msg = "chunk_size must be >= 1"
+        raise ValueError(msg)
+    if overlap < 0 or overlap >= chunk_size:
+        msg = "overlap must satisfy 0 <= overlap < chunk_size"
+        raise ValueError(msg)
     chunks: list[str] = []
     current = ""
 

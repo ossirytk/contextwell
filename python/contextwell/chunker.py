@@ -47,8 +47,14 @@ def chunk_text(
         max_words = _chunk_size()
     if overlap is None:
         overlap = _chunk_overlap()
+        overlap = min(max(overlap, 0), max_words - 1) if max_words > 0 else overlap
 
-    overlap = min(overlap, max_words - 1)
+    if max_words < 1:
+        msg = "max_words must be >= 1"
+        raise ValueError(msg)
+    if overlap < 0 or overlap >= max_words:
+        msg = "overlap must satisfy 0 <= overlap < max_words"
+        raise ValueError(msg)
     words = text.split()
 
     if len(words) <= max_words:

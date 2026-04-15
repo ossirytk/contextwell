@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,9 +32,21 @@ def _escape_literal(value: str) -> str:
 def _ensure_scalar_indexes(table: Table) -> None:
     """Create missing scalar indexes used by metadata filters."""
     indexed_columns = {column for index in table.list_indices() for column in index.columns}
-    for column in ("scope", "type", "project_id"):
+    for column in ("scope", "type", "project_id", "created_at"):
         if column not in indexed_columns:
             table.create_scalar_index(column)
+
+
+def _normalize_date_bound(value: str, *, is_until: bool) -> str:
+    """Normalize date-only bounds to full ISO datetimes for lexical filtering."""
+    if "T" in value:
+        return value
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        return value
+    day_time = time.max if is_until else time.min
+    return datetime.combine(parsed, day_time, tzinfo=UTC).isoformat()
 
 
 def _where_clauses(
@@ -56,9 +69,9 @@ def _where_clauses(
         tag_conditions = " OR ".join(f"array_has(tags, '{_escape_literal(t)}')" for t in tags)
         clauses.append(f"({tag_conditions})")
     if since:
-        clauses.append(f"created_at >= '{_escape_literal(since)}'")
+        clauses.append(f"created_at >= '{_escape_literal(_normalize_date_bound(since, is_until=False))}'")
     if until:
-        clauses.append(f"created_at <= '{_escape_literal(until)}'")
+        clauses.append(f"created_at <= '{_escape_literal(_normalize_date_bound(until, is_until=True))}'")
     return clauses
 
 
@@ -80,7 +93,7 @@ def _ensure_parent_ids_column(table: Table) -> None:
     if "parent_ids" not in {f.name for f in table.schema}:
         import pyarrow as pa  # noqa: PLC0415
 
-        table.add_columns({"parent_ids": pa.array([[]], type=pa.list_(pa.string()))[0]})
+        table.add_columns(pa.schema([pa.field("parent_ids", pa.list_(pa.string()))]))
 
 
 def _ensure_chunk_of_column(table: Table) -> None:
@@ -142,6 +155,10 @@ def _clean(row: dict) -> dict:
     """Strip LanceDB internal columns from a result row."""
     row.pop("_distance", None)
     row.pop("embedding", None)
+    if row.get("tags") is None:
+        row["tags"] = []
+    if row.get("parent_ids") is None:
+        row["parent_ids"] = []
     return row
 
 
@@ -186,21 +203,25 @@ def _recall_hybrid(
             q = q.where(" AND ".join(clauses))
         return [_clean(row) for row in q.to_list()]
 
-    pool_limit = max(k * 10, 100)
-    pool_q = table.search().limit(pool_limit)
+    corpus_q = table.search()
     if clauses:
-        pool_q = pool_q.where(" AND ".join(clauses))
-    pool_rows = [_clean(row) for row in pool_q.to_list()]
-    id_to_row = {row["id"]: row for row in pool_rows}
+        corpus_q = corpus_q.where(" AND ".join(clauses))
+    corpus_rows = [_clean(row) for row in corpus_q.to_list()]
+    if not corpus_rows:
+        return []
+    id_to_row = {row["id"]: row for row in corpus_rows}
 
-    candidate_k = min(k * 3, pool_limit)
+    candidate_k = min(k * 3, len(corpus_rows))
 
     dense_q = table.search(embedding).limit(candidate_k)
     if clauses:
         dense_q = dense_q.where(" AND ".join(clauses))
     dense_ids = [row["id"] for row in dense_q.to_list()]
 
-    sparse_ids = bm25_search(pool_rows, query, candidate_k)
+    try:
+        sparse_ids = bm25_search(corpus_rows, query, candidate_k)
+    except ImportError:
+        return [id_to_row[mid] for mid in dense_ids if mid in id_to_row][:k]
 
     fused = search_candidates(dense_ids, sparse_ids)
     return [id_to_row[mid] for mid, _ in fused[:k] if mid in id_to_row]
@@ -266,13 +287,14 @@ def recall(
             q = q.where(" AND ".join(clauses))
         results = [_clean(row) for row in q.to_list()]
 
-    # Deduplicate chunks from the same group, keeping the highest-scoring hit.
-    results = _dedup_chunks(results, k)
-
     if rerank and query:
         from contextwell.reranker import rerank as _rerank  # noqa: PLC0415
 
-        return _rerank(query, results, k)
+        reranked = _rerank(query, results, len(results))
+        return _dedup_chunks(reranked, k)
+
+    # Deduplicate chunks from the same group, keeping the highest-scoring hit.
+    results = _dedup_chunks(results, k)
 
     return results[:k]
 
@@ -308,8 +330,11 @@ def scan(
 def forget(memory_id: str) -> bool:
     """Delete a memory by ID. Returns True if found and deleted."""
     table = _get_table()
+    resolved = _resolve_memory_id(table, memory_id)
+    if not resolved:
+        return False
     before = table.count_rows()
-    table.delete(f"id = '{_escape_literal(memory_id)}'")
+    table.delete(f"id = '{_escape_literal(resolved)}'")
     return table.count_rows() < before
 
 
@@ -347,16 +372,11 @@ def update(
     Supports partial ID matching (first 8 chars). Re-embedding must be done by
     the caller and passed via *new_embedding* when *content* changes.
     """
-    from datetime import UTC, datetime  # noqa: PLC0415
-
     table = _get_table()
-
-    # Resolve full ID from partial match if needed.
-    where = (
-        f"id = '{_escape_literal(memory_id)}'"
-        if len(memory_id) > 8  # noqa: PLR2004
-        else f"id LIKE '{_escape_literal(memory_id)}%'"
-    )
+    resolved = _resolve_memory_id(table, memory_id)
+    if not resolved:
+        return False
+    where = f"id = '{_escape_literal(resolved)}'"
 
     values: dict[str, object] = {"updated_at": datetime.now(UTC).isoformat()}
     if content is not None:
@@ -373,6 +393,21 @@ def update(
     table.update(where=where, values=values)
     # Row count doesn't change on updates, so verify existence by re-querying.
     return bool(table.search().where(where).limit(1).to_list())
+
+
+def _resolve_memory_id(table: Table, memory_id: str) -> str | None:
+    """Resolve an ID or 8-char prefix to exactly one stored full ID."""
+    escaped = _escape_literal(memory_id)
+    if len(memory_id) > 8:  # noqa: PLR2004
+        where = f"id = '{escaped}'"
+        if table.search().where(where).limit(1).to_list():
+            return memory_id
+        return None
+
+    matches = table.search().select(["id"]).where(f"id LIKE '{escaped}%'").limit(2).to_list()
+    if len(matches) != 1:
+        return None
+    return str(matches[0]["id"])
 
 
 def find_cluster(
@@ -462,26 +497,33 @@ def memory_stats() -> dict:
     - ``store_bytes``: disk usage of the LanceDB directory in bytes
     """
     table = _get_table()
-    rows = table.search().select(["type", "scope", "created_at"]).limit(100_000).to_list()
+    total = table.count_rows()
 
     by_type: dict[str, int] = {}
     by_scope: dict[str, int] = {}
     timestamps: list[str] = []
 
-    for row in rows:
-        t = row.get("type") or "unknown"
-        s = row.get("scope") or "unknown"
-        by_type[t] = by_type.get(t, 0) + 1
-        by_scope[s] = by_scope.get(s, 0) + 1
-        ts = row.get("created_at") or ""
-        if ts:
-            timestamps.append(ts)
+    page_size = 10_000
+    offset = 0
+    while offset < total:
+        rows = table.search().select(["type", "scope", "created_at"]).limit(page_size).offset(offset).to_list()
+        if not rows:
+            break
+        for row in rows:
+            t = row.get("type") or "unknown"
+            s = row.get("scope") or "unknown"
+            by_type[t] = by_type.get(t, 0) + 1
+            by_scope[s] = by_scope.get(s, 0) + 1
+            ts = row.get("created_at") or ""
+            if ts:
+                timestamps.append(ts)
+        offset += len(rows)
 
     timestamps.sort()
     store_bytes = sum(f.stat().st_size for f in DB_PATH.rglob("*") if f.is_file()) if DB_PATH.exists() else 0
 
     return {
-        "total": len(rows),
+        "total": total,
         "by_type": by_type,
         "by_scope": by_scope,
         "oldest": timestamps[0] if timestamps else "",

@@ -15,7 +15,13 @@ The Python layer handles the MCP protocol (FastMCP), embedding models, and the L
 | `remember` | Store a new memory — fact, decision, code snippet, todo, or chat extract |
 | `recall` | Search memories by meaning using semantic similarity |
 | `forget` | Delete a memory by ID |
+| `list_memories` | Browse memories with scope/type/tag/date filters |
 | `update` | Edit content, type, tags, or source of an existing memory in-place; re-embeds automatically if content changes |
+| `remember_file` | Ingest a markdown file into memory chunks with inferred metadata |
+| `remember_batch` | Store many memories in one call with batched embedding |
+| `compress_memories` | Replace similar memories with a single summary memory |
+| `export_memories` | Export memories to JSON, Markdown, or Org-mode |
+| `memory_stats` | Show aggregate counts, timestamps, and store size |
 
 Memories can be scoped as `global` (across all projects) or `project` (tied to the current git repository, auto-detected from the working directory).
 
@@ -144,4 +150,3 @@ cargo fmt
 # Run tests
 uv run pytest
 ```
-

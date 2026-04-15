@@ -79,6 +79,13 @@ def test_h3_headers_split(tmp_path: Path) -> None:
     assert len(chunks) == 2
 
 
+def test_h1_header_does_not_split(tmp_path: Path) -> None:
+    """Top-level # headers do not trigger section splitting."""
+    md = _write(tmp_path, "h1.md", "# Title\nBody line one.\nBody line two.\n")
+    chunks = parse(md)
+    assert len(chunks) == 1
+
+
 def test_header_source_is_file_path(tmp_path: Path) -> None:
     """chunk.source is the string path of the file."""
     md = _write(tmp_path, "src.md", "## Section\nBody.\n")
@@ -157,6 +164,14 @@ def test_flat_file_chunked_when_large(tmp_path: Path) -> None:
     assert len(chunks) > 1
     # Every chunk should be non-empty
     assert all(c.content.strip() for c in chunks)
+
+
+def test_parse_raises_on_invalid_overlap() -> None:
+    """Invalid paragraph overlap settings raise a clear error."""
+    from contextwell import markdown_import  # noqa: PLC0415
+
+    with pytest.raises(ValueError, match="overlap"):
+        markdown_import._paragraph_chunks("plain text", chunk_size=10, overlap=10)  # noqa: SLF001
 
 
 def test_empty_file_raises(tmp_path: Path) -> None:

@@ -86,6 +86,17 @@ def remember(
 
             group_id = str(uuid4())
             embeddings = embed_batch(chunks)
+            if not allow_duplicate:
+                for emb in embeddings:
+                    duplicate = check_duplicate(emb)
+                    if duplicate:
+                        dup_id = duplicate["id"]
+                        snippet = duplicate["content"][:80]
+                        return (
+                            f"⚠ Near-duplicate detected (similarity ≥ 95%): "
+                            f"#{dup_id[:8]} — {snippet}. "
+                            f"Pass allow_duplicate=True to store anyway."
+                        )
             ids = []
             for chunk, emb in zip(chunks, embeddings, strict=True):
                 m = Memory(
