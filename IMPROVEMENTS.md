@@ -130,7 +130,7 @@ After initial vector recall, re-score with a cross-encoder for higher-precision 
 
 ---
 
-## 12. Chunking for Long Content
+## ✅ 12. Chunking for Long Content
 
 Automatically split content > N tokens in `remember` into overlapping chunks.
 

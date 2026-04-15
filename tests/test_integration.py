@@ -922,3 +922,106 @@ def test_recall_rerank_false_unchanged(tmp_path, monkeypatch) -> None:
     emb = _test_embed("item")
     recall(emb, query="item", scope="global", k=3, rerank=False)
     assert not called
+
+
+# ---------------------------------------------------------------------------
+# Item 12: chunking tests
+# ---------------------------------------------------------------------------
+
+def test_chunk_text_short_passthrough() -> None:
+    """chunk_text returns a single-element list for short content."""
+    from contextwell.chunker import chunk_text  # noqa: PLC0415
+
+    text = "hello world"
+    assert chunk_text(text, max_words=10) == [text]
+
+
+def test_chunk_text_splits_long() -> None:
+    """chunk_text splits text longer than max_words into multiple chunks."""
+    from contextwell.chunker import chunk_text  # noqa: PLC0415
+
+    words = [f"word{i}" for i in range(20)]
+    text = " ".join(words)
+    chunks = chunk_text(text, max_words=10, overlap=2)
+    assert len(chunks) > 1
+    # Every chunk should be at most 10 words
+    for chunk in chunks:
+        assert len(chunk.split()) <= 10
+    # All original words appear somewhere in the chunks
+    all_words = set()
+    for chunk in chunks:
+        all_words.update(chunk.split())
+    assert all_words == set(words)
+
+
+def test_chunk_text_overlap() -> None:
+    """Chunks overlap by the specified number of words."""
+    from contextwell.chunker import chunk_text  # noqa: PLC0415
+
+    words = [f"w{i}" for i in range(15)]
+    text = " ".join(words)
+    chunks = chunk_text(text, max_words=8, overlap=3)
+    # The last 3 words of chunk 0 should appear at the start of chunk 1
+    last_words_of_first = chunks[0].split()[-3:]
+    first_words_of_second = chunks[1].split()[:3]
+    assert last_words_of_first == first_words_of_second
+
+
+def test_remember_chunks_long_content(tmp_path, monkeypatch) -> None:
+    """remember() auto-chunks long content when CONTEXTWELL_CHUNKING=1."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    monkeypatch.setenv("CONTEXTWELL_CHUNKING", "1")
+    monkeypatch.setenv("CONTEXTWELL_CHUNK_SIZE", "10")
+    monkeypatch.setenv("CONTEXTWELL_CHUNK_OVERLAP", "2")
+    _patch_embed_batch(monkeypatch)
+
+    long_content = " ".join(f"word{i}" for i in range(30))
+    result = server_module.remember(long_content, type="fact", scope="global")
+    assert "Chunked into" in result
+
+    rows = scan(scope="global")
+    assert len(rows) > 1
+    # All chunks should share the same chunk_of group ID
+    group_ids = {r["chunk_of"] for r in rows if r.get("chunk_of")}
+    assert len(group_ids) == 1
+
+
+def test_remember_no_chunk_short(tmp_path, monkeypatch) -> None:
+    """remember() stores a single memory when content is short, even with chunking on."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    monkeypatch.setenv("CONTEXTWELL_CHUNKING", "1")
+    monkeypatch.setenv("CONTEXTWELL_CHUNK_SIZE", "100")
+    _patch_embed_batch(monkeypatch)
+
+    result = server_module.remember("short content", type="fact", scope="global")
+    assert "Remembered" in result
+    assert len(scan(scope="global")) == 1
+
+
+def test_dedup_chunks_in_recall(tmp_path, monkeypatch) -> None:
+    """recall() returns only one result per chunk group."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    group = "test-group-id"
+    emb = _test_embed("shared chunk content")
+
+    # Store two chunks with the same chunk_of group
+    for i in range(2):
+        m = Memory(content=f"chunk {i} of the same document", type="fact", scope="global")
+        m.embedding = emb
+        m.chunk_of = group
+        store(m)
+
+    # Store an unrelated memory
+    other = Memory(content="unrelated memory", type="fact", scope="global")
+    other.embedding = _test_embed("unrelated memory")
+    store(other)
+
+    results = recall(emb, scope="global", k=10)
+    # Both chunks share a group — only one should appear
+    chunk_ids = [r["id"] for r in results if r.get("chunk_of") == group]
+    assert len(chunk_ids) == 1

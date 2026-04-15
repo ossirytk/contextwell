@@ -16,6 +16,7 @@ _EXPORT_FIELDS = (
     "created_at",
     "updated_at",
     "parent_ids",
+    "chunk_of",
 )
 
 

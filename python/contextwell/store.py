@@ -83,6 +83,12 @@ def _ensure_parent_ids_column(table: Table) -> None:
         table.add_columns({"parent_ids": pa.array([[]], type=pa.list_(pa.string()))[0]})
 
 
+def _ensure_chunk_of_column(table: Table) -> None:
+    """Add the chunk_of column to existing tables that pre-date this field."""
+    if "chunk_of" not in {f.name for f in table.schema}:
+        table.add_columns({"chunk_of": "''"})
+
+
 def _get_table():  # noqa: ANN202
     import pyarrow as pa  # noqa: PLC0415
 
@@ -102,6 +108,7 @@ def _get_table():  # noqa: ANN202
                 pa.field("created_at", pa.string()),
                 pa.field("updated_at", pa.string()),
                 pa.field("parent_ids", pa.list_(pa.string())),
+                pa.field("chunk_of", pa.string()),
                 pa.field("embedding", pa.list_(pa.float32(), dim)),
             ]
         )
@@ -112,6 +119,7 @@ def _get_table():  # noqa: ANN202
     _ensure_scalar_indexes(tbl)
     _ensure_updated_at_column(tbl)
     _ensure_parent_ids_column(tbl)
+    _ensure_chunk_of_column(tbl)
     _check_embedding_dim(tbl, dim)
     return tbl
 
@@ -153,6 +161,7 @@ def store(memory: Memory) -> str:
                 "created_at": memory.created_at.isoformat(),
                 "updated_at": "",
                 "parent_ids": memory.parent_ids,
+                "chunk_of": memory.chunk_of,
                 "embedding": memory.embedding,
             }
         ]
@@ -197,6 +206,28 @@ def _recall_hybrid(
     return [id_to_row[mid] for mid, _ in fused[:k] if mid in id_to_row]
 
 
+def _dedup_chunks(rows: list[dict], k: int) -> list[dict]:
+    """Remove duplicate chunks sharing the same ``chunk_of`` group.
+
+    Results are assumed to be in descending relevance order.  The first
+    (highest-scoring) chunk per group is kept; subsequent chunks from the
+    same group are dropped.  Non-chunk rows (``chunk_of == ""``) pass through
+    unchanged.  The list is truncated to *k* after deduplication.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for row in rows:
+        group = row.get("chunk_of") or ""
+        if group:
+            if group in seen:
+                continue
+            seen.add(group)
+        out.append(row)
+        if len(out) >= k:
+            break
+    return out
+
+
 def recall(
     embedding: list[float],
     query: str = "",
@@ -216,11 +247,16 @@ def recall(
     When *rerank* is ``True`` and *query* is provided, the initial candidate
     set is expanded to ``k * 3`` results and then re-scored by a cross-encoder
     (``cross-encoder/ms-marco-MiniLM-L-6-v2`` by default) for higher precision.
+
+    Chunks sharing the same ``chunk_of`` group ID are deduplicated: only the
+    highest-scoring chunk per group is kept.
     """
     table = _get_table()
     clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id, tags=tags)
 
-    candidate_k = max(k * 3, 20) if (rerank and query) else k
+    # Expand candidate pool when chunking may produce duplicate groups or reranking.
+    has_chunks = os.getenv("CONTEXTWELL_CHUNKING") == "1"
+    candidate_k = max(k * 3, 20) if (rerank and query) or has_chunks else k
 
     if os.getenv("CONTEXTWELL_HYBRID") == "1" and query:
         results = _recall_hybrid(table, embedding, query, clauses, candidate_k)
@@ -229,6 +265,9 @@ def recall(
         if clauses:
             q = q.where(" AND ".join(clauses))
         results = [_clean(row) for row in q.to_list()]
+
+    # Deduplicate chunks from the same group, keeping the highest-scoring hit.
+    results = _dedup_chunks(results, k)
 
     if rerank and query:
         from contextwell.reranker import rerank as _rerank  # noqa: PLC0415

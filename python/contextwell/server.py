@@ -48,6 +48,12 @@ def remember(
 ) -> str:
     """Store a new memory.
 
+    When ``CONTEXTWELL_CHUNKING=1`` is set and *content* exceeds
+    ``CONTEXTWELL_CHUNK_SIZE`` words (default 400), the content is
+    automatically split into overlapping chunks and stored separately.
+    Each chunk shares a ``chunk_of`` group ID so that ``recall`` can
+    deduplicate them, showing only the best-matching chunk.
+
     Args:
         content: The text to remember.
         type: Kind of memory — code, chat, decision, todo, or fact.
@@ -59,7 +65,8 @@ def remember(
                 'cwd:D:/myproject'. Otherwise the server CWD is used.
         allow_duplicate: Skip the near-duplicate check and store regardless.
     """
-    from contextwell.embedder import embed  # noqa: PLC0415
+    from contextwell.chunker import chunk_text, chunking_enabled  # noqa: PLC0415
+    from contextwell.embedder import embed, embed_batch  # noqa: PLC0415
     from contextwell.store import check_duplicate, store  # noqa: PLC0415
 
     cwd: str | None = None
@@ -69,6 +76,36 @@ def remember(
         clean_source = rest or None
 
     project_id = _project_id_for_scope(scope, cwd, allow_source_hint=True)
+    scope_label = f"project:{project_id[:8]}" if project_id else scope
+
+    # --- Auto-chunking path ---
+    if chunking_enabled():
+        chunks = chunk_text(content)
+        if len(chunks) > 1:
+            from uuid import uuid4  # noqa: PLC0415
+
+            group_id = str(uuid4())
+            embeddings = embed_batch(chunks)
+            ids = []
+            for chunk, emb in zip(chunks, embeddings, strict=True):
+                m = Memory(
+                    content=chunk,
+                    type=type,
+                    scope=scope,
+                    project_id=project_id,
+                    tags=tags or [],
+                    source=clean_source,
+                    chunk_of=group_id,
+                )
+                m.embedding = emb
+                ids.append(store(m))
+            return (
+                f"Chunked into {len(ids)} piece{'s' if len(ids) > 1 else ''} "
+                f"[{type}|{scope_label}] group:{group_id[:8]}: "
+                + ", ".join(f"#{mid[:8]}" for mid in ids)
+            )
+
+    # --- Normal (single-memory) path ---
     embedding = embed(content)
 
     if not allow_duplicate:
@@ -92,7 +129,6 @@ def remember(
     )
     memory.embedding = embedding
     memory_id = store(memory)
-    scope_label = f"project:{project_id[:8]}" if project_id else scope
     return f"Remembered [{type}|{scope_label}] #{memory_id[:8]}: {content[:80]}"
 
 
