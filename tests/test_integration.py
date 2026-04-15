@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 import contextwell.store as store_module
 from contextwell.project import detect_project_id
 from contextwell.schema import Memory
-from contextwell.store import forget, recall, scan, store
+from contextwell.store import forget, recall, scan, store, update
 
 _EMBEDDING_DIM = 384
 
@@ -128,3 +128,80 @@ def test_tags_filter_combined_with_type(tmp_path, monkeypatch) -> None:
     ids = {r["id"] for r in rows}
     assert m1.id in ids
     assert m2.id not in ids  # excluded by type filter
+
+
+def test_update_content_and_reembed(tmp_path, monkeypatch) -> None:
+    """update() replaces content and accepts a new embedding."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="Original content", type="fact", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    new_content = "Updated content"
+    new_embed = _test_embed(new_content)
+    found = update(m.id, content=new_content, new_embedding=new_embed)
+    assert found
+
+    rows = scan(limit=10)
+    assert len(rows) == 1
+    assert rows[0]["content"] == new_content
+    assert rows[0]["updated_at"] != ""
+
+
+def test_update_tags_only(tmp_path, monkeypatch) -> None:
+    """update() can change just tags without touching content or embedding."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="Some fact", type="fact", scope="global", tags=["old"])
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    found = update(m.id, tags=["new", "tags"])
+    assert found
+
+    rows = scan(limit=10)
+    assert rows[0]["tags"] == ["new", "tags"]
+    assert rows[0]["content"] == "Some fact"  # unchanged
+
+
+def test_update_partial_id(tmp_path, monkeypatch) -> None:
+    """update() resolves memories by first 8 chars of ID."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="Partial ID test", type="fact", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    found = update(m.id[:8], tags=["found-by-prefix"])
+    assert found
+    rows = scan(limit=10)
+    assert "found-by-prefix" in rows[0]["tags"]
+
+
+def test_update_not_found(tmp_path, monkeypatch) -> None:
+    """update() returns False when no memory matches the given ID."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="Existing", type="fact", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    found = update("00000000-0000-0000-0000-000000000000", content="ghost")
+    assert not found
+
+
+def test_update_preserves_created_at(tmp_path, monkeypatch) -> None:
+    """update() sets updated_at but leaves created_at intact."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="Timestamp test", type="fact", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+    original_created_at = scan(limit=1)[0]["created_at"]
+
+    update(m.id, tags=["touched"])
+
+    row = scan(limit=1)[0]
+    assert row["created_at"] == original_created_at
+    assert row["updated_at"] != ""

@@ -145,6 +145,51 @@ def list_memories(
 
 
 @mcp.tool
+@mcp.tool
+def update(
+    memory_id: str,
+    content: str | None = None,
+    type: MemoryType | None = None,  # noqa: A002
+    tags: list[str] | None = None,
+    source: str | None = None,
+) -> str:
+    """Update fields of an existing memory in-place.
+
+    Only the fields you provide are changed; the rest are left untouched.
+    The memory's original ID and created_at are preserved. updated_at is
+    set automatically. Re-embedding is performed automatically if content changes.
+
+    Args:
+        memory_id: Full or partial (first 8 chars) ID of the memory to update.
+        content: New text content. Triggers automatic re-embedding.
+        type: New memory type (code, chat, decision, todo, or fact).
+        tags: Replacement tag list (replaces existing tags entirely).
+        source: New source reference.
+    """
+    from contextwell.store import update as _update  # noqa: PLC0415
+
+    if all(v is None for v in (content, type, tags, source)):
+        return "Nothing to update — provide at least one field to change."
+
+    new_embedding: list[float] | None = None
+    if content is not None:
+        from contextwell.embedder import embed  # noqa: PLC0415
+
+        new_embedding = embed(content)
+
+    found = _update(
+        memory_id,
+        content=content,
+        memory_type=type,
+        tags=tags,
+        source=source,
+        new_embedding=new_embedding,
+    )
+    if found:
+        return f"Memory {memory_id[:8]} updated."
+    return f"No memory found with ID {memory_id[:8]}."
+
+
 def remember_file(
     path: str,
     scope: MemoryScope = "global",

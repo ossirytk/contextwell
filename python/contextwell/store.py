@@ -54,6 +54,12 @@ def _get_db():  # noqa: ANN202
     return lancedb.connect(str(DB_PATH))
 
 
+def _ensure_updated_at_column(table: Table) -> None:
+    """Add the updated_at column to existing tables that pre-date this field."""
+    if "updated_at" not in {f.name for f in table.schema}:
+        table.add_columns({"updated_at": "''"})
+
+
 def _get_table():  # noqa: ANN202
     import pyarrow as pa  # noqa: PLC0415
 
@@ -70,6 +76,7 @@ def _get_table():  # noqa: ANN202
                 pa.field("tags", pa.list_(pa.string())),
                 pa.field("source", pa.string()),
                 pa.field("created_at", pa.string()),
+                pa.field("updated_at", pa.string()),
                 pa.field("embedding", pa.list_(pa.float32(), _EMBEDDING_DIM)),
             ]
         )
@@ -78,6 +85,7 @@ def _get_table():  # noqa: ANN202
         return tbl
     tbl = db.open_table("memories")
     _ensure_scalar_indexes(tbl)
+    _ensure_updated_at_column(tbl)
     return tbl
 
 
@@ -154,3 +162,44 @@ def forget(memory_id: str) -> bool:
     before = table.count_rows()
     table.delete(f"id = '{_escape_literal(memory_id)}'")
     return table.count_rows() < before
+
+
+def update(
+    memory_id: str,
+    content: str | None = None,
+    memory_type: str | None = None,
+    tags: list[str] | None = None,
+    source: str | None = None,
+    new_embedding: list[float] | None = None,
+) -> bool:
+    """Update fields of an existing memory in-place. Returns True if found and updated.
+
+    Supports partial ID matching (first 8 chars). Re-embedding must be done by
+    the caller and passed via *new_embedding* when *content* changes.
+    """
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    table = _get_table()
+
+    # Resolve full ID from partial match if needed.
+    where = (
+        f"id = '{_escape_literal(memory_id)}'"
+        if len(memory_id) > 8  # noqa: PLR2004
+        else f"id LIKE '{_escape_literal(memory_id)}%'"
+    )
+
+    values: dict[str, object] = {"updated_at": datetime.now(UTC).isoformat()}
+    if content is not None:
+        values["content"] = content
+    if memory_type is not None:
+        values["type"] = memory_type
+    if tags is not None:
+        values["tags"] = tags
+    if source is not None:
+        values["source"] = source
+    if new_embedding is not None:
+        values["embedding"] = new_embedding
+
+    table.update(where=where, values=values)
+    # Row count doesn't change on updates, so verify existence by re-querying.
+    return bool(table.search().where(where).limit(1).to_list())

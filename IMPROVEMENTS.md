@@ -30,7 +30,7 @@ Tags are stored today but have zero query power. Add a `tags` filter parameter t
 
 ---
 
-## 3. `update` Tool — In-Place Memory Editing
+## ~~3. `update` Tool — In-Place Memory Editing~~ ✅
 
 Allow editing an existing memory without delete + recreate. Preserves original ID and `created_at`.
 
