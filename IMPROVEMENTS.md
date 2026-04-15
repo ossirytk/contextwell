@@ -88,7 +88,7 @@ Mirrors Copilot's `/compact` for the memory store.
 
 ---
 
-## 8. Date Range Filtering
+## ✅ 8. Date Range Filtering
 
 Add `since` / `until` parameters to `list_memories`.
 

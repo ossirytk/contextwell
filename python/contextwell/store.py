@@ -41,6 +41,8 @@ def _where_clauses(
     memory_type: str = "",
     project_id: str = "",
     tags: list[str] | None = None,
+    since: str = "",
+    until: str = "",
 ) -> list[str]:
     clauses = []
     if scope:
@@ -53,6 +55,10 @@ def _where_clauses(
         # Any-match: memory must contain at least one of the requested tags.
         tag_conditions = " OR ".join(f"array_has(tags, '{_escape_literal(t)}')" for t in tags)
         clauses.append(f"({tag_conditions})")
+    if since:
+        clauses.append(f"created_at >= '{_escape_literal(since)}'")
+    if until:
+        clauses.append(f"created_at <= '{_escape_literal(until)}'")
     return clauses
 
 
@@ -224,11 +230,20 @@ def scan(
     project_id: str = "",
     tags: list[str] | None = None,
     limit: int = 50,
+    since: str = "",
+    until: str = "",
 ) -> list[dict]:
     """Full-table scan with optional metadata filters. No vector required."""
     table = _get_table()
 
-    clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id, tags=tags)
+    clauses = _where_clauses(
+        scope=scope,
+        memory_type=memory_type,
+        project_id=project_id,
+        tags=tags,
+        since=since,
+        until=until,
+    )
 
     query = table.search().limit(limit)
     if clauses:

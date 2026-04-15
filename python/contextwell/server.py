@@ -143,6 +143,8 @@ def list_memories(
     type: MemoryType | Literal[""] = "",  # noqa: A002
     tags: list[str] | None = None,
     limit: int = 50,
+    since: str = "",
+    until: str = "",
 ) -> list[dict]:
     """Browse stored memories with optional filters.
 
@@ -152,11 +154,23 @@ def list_memories(
         type: Filter by memory type. Empty means all.
         tags: Only return memories that have at least one of these tags.
         limit: Maximum number of results.
+        since: ISO 8601 date/datetime lower bound for created_at (inclusive).
+               Examples: "2025-01-01", "2025-03-15T09:00:00".
+        until: ISO 8601 date/datetime upper bound for created_at (inclusive).
+               Examples: "2025-03-31", "2025-03-31T23:59:59".
     """
     from contextwell.store import scan  # noqa: PLC0415
 
     project_id = _project_id_for_scope(scope) or ""
-    return scan(scope=scope, memory_type=type, project_id=project_id or "", tags=tags, limit=limit)
+    return scan(
+        scope=scope,
+        memory_type=type,
+        project_id=project_id or "",
+        tags=tags,
+        limit=limit,
+        since=since,
+        until=until,
+    )
 
 
 @mcp.tool

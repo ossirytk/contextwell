@@ -414,6 +414,80 @@ def test_dimension_mismatch_raises(tmp_path, monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Date range filtering tests
+# ---------------------------------------------------------------------------
+
+def test_since_filter_excludes_older(tmp_path, monkeypatch) -> None:
+    """scan with since= excludes memories with older created_at."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    old = Memory(content="old memory", type="fact", scope="global")
+    old.embedding = _test_embed("old memory")
+    old.created_at = datetime(2024, 1, 1, tzinfo=UTC)
+    store(old)
+
+    new = Memory(content="new memory", type="fact", scope="global")
+    new.embedding = _test_embed("new memory")
+    new.created_at = datetime(2025, 6, 1, tzinfo=UTC)
+    store(new)
+
+    results = scan(since="2025-01-01")
+    ids = {r["id"] for r in results}
+    assert new.id in ids
+    assert old.id not in ids
+
+
+def test_until_filter_excludes_newer(tmp_path, monkeypatch) -> None:
+    """scan with until= excludes memories with newer created_at."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    old = Memory(content="old entry", type="fact", scope="global")
+    old.embedding = _test_embed("old entry")
+    old.created_at = datetime(2024, 3, 15, tzinfo=UTC)
+    store(old)
+
+    new = Memory(content="new entry", type="fact", scope="global")
+    new.embedding = _test_embed("new entry")
+    new.created_at = datetime(2025, 8, 1, tzinfo=UTC)
+    store(new)
+
+    results = scan(until="2024-12-31")
+    ids = {r["id"] for r in results}
+    assert old.id in ids
+    assert new.id not in ids
+
+
+def test_since_until_range(tmp_path, monkeypatch) -> None:
+    """scan with both since= and until= returns only memories in the window."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    dates = [
+        datetime(2024, 12, 31, tzinfo=UTC),
+        datetime(2025, 2, 15, tzinfo=UTC),
+        datetime(2025, 6, 30, tzinfo=UTC),
+    ]
+    memories = []
+    for i, dt in enumerate(dates):
+        m = Memory(content=f"entry {i}", type="fact", scope="global")
+        m.embedding = _test_embed(f"entry {i}")
+        m.created_at = dt
+        store(m)
+        memories.append(m)
+
+    results = scan(since="2025-01-01", until="2025-05-31")
+    ids = {r["id"] for r in results}
+    assert memories[1].id in ids       # 2025-02-15 is in range
+    assert memories[0].id not in ids   # 2024-12-31 is before since
+    assert memories[2].id not in ids   # 2025-06-30 is after until
+
+
+# ---------------------------------------------------------------------------
 # find_cluster / compress tests
 # ---------------------------------------------------------------------------
 
