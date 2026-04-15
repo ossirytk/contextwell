@@ -10,6 +10,9 @@ dependencies = [
     "sentence-transformers>=5.3.0",
 ]
 
+[project.optional-dependencies]
+hybrid = ["rank-bm25"]
+
 [project.scripts]
 contextwell = "contextwell.server:run"
 
@@ -18,6 +21,7 @@ dev = [
     "maturin>=1.12.6",
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
+    "rank-bm25>=0.2.2",
     "ruff>=0.15.8",
 ]
 
@@ -84,7 +88,7 @@ select = [
     "FURB",
     "RUF",
 ]
-ignore = ["FBT001", "S603", "G004", "S607", "COM812"]
+ignore = ["FBT001", "FBT002", "S603", "G004", "S607", "COM812"]
 unfixable = [
     # Don't touch unused imports
     "F401",
@@ -95,6 +99,9 @@ unfixable = [
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
+
+[tool.ruff.lint.pylint]
+max-args = 8
 
 [tool.coverage.run]
 source = ["contextwell"]

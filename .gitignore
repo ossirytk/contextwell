@@ -16,6 +16,10 @@ MANIFEST
 wheels/
 .eggs/
 
+# Compiled extensions (maturin output)
+*.so
+*.pyd
+
 # Virtual environments
 .venv
 venv/

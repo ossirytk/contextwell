@@ -15,7 +15,13 @@ The Python layer handles the MCP protocol (FastMCP), embedding models, and the L
 | `remember` | Store a new memory — fact, decision, code snippet, todo, or chat extract |
 | `recall` | Search memories by meaning using semantic similarity |
 | `forget` | Delete a memory by ID |
-| `list_memories` | Browse stored memories with optional scope and type filters |
+| `list_memories` | Browse memories with scope/type/tag/date filters |
+| `update` | Edit content, type, tags, or source of an existing memory in-place; re-embeds automatically if content changes |
+| `remember_file` | Ingest a markdown file into memory chunks with inferred metadata |
+| `remember_batch` | Store many memories in one call with batched embedding |
+| `compress_memories` | Replace similar memories with a single summary memory |
+| `export_memories` | Export memories to JSON, Markdown, or Org-mode |
+| `memory_stats` | Show aggregate counts, timestamps, and store size |
 
 Memories can be scoped as `global` (across all projects) or `project` (tied to the current git repository, auto-detected from the working directory).
 
@@ -49,7 +55,44 @@ uv run maturin develop
 uv run contextwell
 ```
 
-Register in your MCP client config and use naturally:
+### GitHub Copilot CLI
+
+Add to `~/.copilot/mcp-config.json`:
+
+```json
+{
+  "mcpServers": {
+    "contextwell": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/contextwell", "contextwell"],
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+Replace `/path/to/contextwell` with the absolute path to this repository. Restart Copilot CLI after saving — use `/mcp` or `/env` to verify the server is loaded.
+
+### VS Code
+
+Add to your `settings.json` or a workspace MCP config file:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "contextwell": {
+        "type": "stdio",
+        "command": "uv",
+        "args": ["run", "--directory", "/path/to/contextwell", "contextwell"]
+      }
+    }
+  }
+}
+```
+
+### Use naturally:
 
 > *"Remember that we chose LanceDB over ChromaDB for its hybrid search support"*  
 > *"What decisions have we made about the database layer?"*  
@@ -68,12 +111,17 @@ Core dependencies (installed with `uv sync`):
 | Package | Purpose |
 |---------|---------|
 | `fastmcp` | MCP server framework |
-| `sentence-transformers` | Embedding model (`all-MiniLM-L6-v2`, 384-dim) |
+| `sentence-transformers` | Embedding model (`BAAI/bge-small-en-v1.5`, 384-dim, 512-token context) |
 | `lancedb==0.30.0` | Vector store with scalar index support |
 
 > **Note:** `lancedb` is pinned to `0.30.0` — newer versions may lack a Windows wheel.
 
-Optional, for future hybrid search:
+> **Upgrading from `all-MiniLM-L6-v2`:** The default model changed to `BAAI/bge-small-en-v1.5`
+> in v0.1 (same 384-dim, but a different embedding space). Vectors from the two models are
+> incompatible. If you have an existing store, delete `~/.contextwell/memories` and re-add
+> your memories, or pin the old model with `CONTEXTWELL_EMBED_MODEL=all-MiniLM-L6-v2`.
+
+Optional, for hybrid search:
 
 ```powershell
 uv add rank-bm25   # sparse retrieval (BM25) for RRF hybrid search
@@ -102,4 +150,3 @@ cargo fmt
 # Run tests
 uv run pytest
 ```
-
