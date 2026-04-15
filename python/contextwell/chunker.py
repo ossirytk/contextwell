@@ -43,18 +43,21 @@ def chunk_text(
         overlap: Number of words to repeat at the start of each subsequent
                  chunk. Defaults to ``CONTEXTWELL_CHUNK_OVERLAP``.
     """
+    default_overlap = overlap is None
     if max_words is None:
         max_words = _chunk_size()
-    if overlap is None:
-        overlap = _chunk_overlap()
-        overlap = min(max(overlap, 0), max_words - 1) if max_words > 0 else overlap
 
     if max_words < 1:
         msg = "max_words must be >= 1"
         raise ValueError(msg)
+    if overlap is None:
+        overlap = _chunk_overlap()
     if overlap < 0 or overlap >= max_words:
-        msg = "overlap must satisfy 0 <= overlap < max_words"
-        raise ValueError(msg)
+        if default_overlap and overlap >= max_words:
+            overlap = max_words - 1
+        else:
+            msg = "overlap must satisfy 0 <= overlap < max_words"
+            raise ValueError(msg)
     words = text.split()
 
     if len(words) <= max_words:

@@ -43,7 +43,7 @@ def rerank(query: str, rows: list[dict], k: int) -> list[dict]:
         return rows[:k]
     try:
         model = _get_reranker()
-    except (ImportError, OSError, RuntimeError, ValueError):
+    except (ImportError, OSError):
         return rows[:k]
     try:
         pairs = [(query, str(row.get("content", ""))) for row in rows]
