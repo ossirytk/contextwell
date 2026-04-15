@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -11,7 +12,15 @@ if TYPE_CHECKING:
     from contextwell.schema import Memory
 
 DB_PATH = Path.home() / ".contextwell" / "memories"
-_EMBEDDING_DIM = 384
+
+
+def _embedding_dim() -> int:
+    """Return the configured embedding dimension (default 384).
+
+    Override with ``CONTEXTWELL_EMBED_DIM`` to match a non-default model.
+    Must match the dimension of the model set in ``CONTEXTWELL_EMBED_MODEL``.
+    """
+    return int(os.getenv("CONTEXTWELL_EMBED_DIM", "384"))
 
 
 def _escape_literal(value: str) -> str:
@@ -65,6 +74,7 @@ def _get_table():  # noqa: ANN202
 
     db = _get_db()
     existing = db.list_tables().tables
+    dim = _embedding_dim()
     if "memories" not in existing:
         schema = pa.schema(
             [
@@ -77,7 +87,7 @@ def _get_table():  # noqa: ANN202
                 pa.field("source", pa.string()),
                 pa.field("created_at", pa.string()),
                 pa.field("updated_at", pa.string()),
-                pa.field("embedding", pa.list_(pa.float32(), _EMBEDDING_DIM)),
+                pa.field("embedding", pa.list_(pa.float32(), dim)),
             ]
         )
         tbl = db.create_table("memories", schema=schema)
@@ -86,7 +96,22 @@ def _get_table():  # noqa: ANN202
     tbl = db.open_table("memories")
     _ensure_scalar_indexes(tbl)
     _ensure_updated_at_column(tbl)
+    _check_embedding_dim(tbl, dim)
     return tbl
+
+
+def _check_embedding_dim(table: Table, expected: int) -> None:
+    """Raise ValueError when the table's embedding dimension doesn't match *expected*."""
+    emb_field = table.schema.field("embedding")
+    actual: int = emb_field.type.list_size
+    if actual != expected:
+        msg = (
+            f"Embedding dimension mismatch: the memories table was created with "
+            f"dim={actual}, but CONTEXTWELL_EMBED_DIM={expected}. "
+            f"Change CONTEXTWELL_EMBED_DIM to {actual}, or delete "
+            f"{DB_PATH} to start fresh with the new dimension."
+        )
+        raise ValueError(msg)
 
 
 def _clean(row: dict) -> dict:
@@ -169,8 +194,6 @@ def recall(
     and *query* is provided, BM25 sparse retrieval is fused with vector
     search via Reciprocal Rank Fusion (requires the ``rank-bm25`` package).
     """
-    import os  # noqa: PLC0415
-
     table = _get_table()
     clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id, tags=tags)
 

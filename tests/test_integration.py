@@ -5,13 +5,17 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 
+import contextwell.embedder as embedder_module
 import contextwell.store as store_module
 from contextwell.bm25 import bm25_search
+from contextwell.embedder import _model_name, reset_model
 from contextwell.project import detect_project_id
 from contextwell.schema import Memory
-from contextwell.store import check_duplicate, forget, recall, scan, store, update
+from contextwell.store import _embedding_dim, check_duplicate, forget, recall, scan, store, update
 
 _EMBEDDING_DIM = 384
 
@@ -337,3 +341,63 @@ def test_hybrid_recall_falls_back_without_env(tmp_path, monkeypatch) -> None:
     results = recall(_test_embed("Pure vector test"), query="Pure vector test", k=5)
     assert len(results) == 1
     assert results[0]["content"] == "Pure vector test"
+
+
+# --- Item 6: Configurable embedding model ---
+
+
+def test_model_name_default(monkeypatch) -> None:
+    """Default model name is all-MiniLM-L6-v2 when no env var is set."""
+    monkeypatch.delenv("CONTEXTWELL_EMBED_MODEL", raising=False)
+    monkeypatch.delenv("CONTEXTWELL_EMBED_PROVIDER", raising=False)
+    assert _model_name() == "all-MiniLM-L6-v2"
+
+
+def test_model_name_from_env(monkeypatch) -> None:
+    """CONTEXTWELL_EMBED_MODEL overrides the default model name."""
+    monkeypatch.setenv("CONTEXTWELL_EMBED_MODEL", "bge-small-en-v1.5")
+    monkeypatch.delenv("CONTEXTWELL_EMBED_PROVIDER", raising=False)
+    assert _model_name() == "bge-small-en-v1.5"
+
+
+def test_model_name_openai_default(monkeypatch) -> None:
+    """OpenAI provider defaults to text-embedding-3-small when no model is set."""
+    monkeypatch.setenv("CONTEXTWELL_EMBED_PROVIDER", "openai")
+    monkeypatch.delenv("CONTEXTWELL_EMBED_MODEL", raising=False)
+    assert _model_name() == "text-embedding-3-small"
+
+
+def test_embedding_dim_default(monkeypatch) -> None:
+    """Default embedding dimension is 384."""
+    monkeypatch.delenv("CONTEXTWELL_EMBED_DIM", raising=False)
+    assert _embedding_dim() == 384
+
+
+def test_embedding_dim_from_env(monkeypatch) -> None:
+    """CONTEXTWELL_EMBED_DIM overrides the embedding dimension."""
+    monkeypatch.setenv("CONTEXTWELL_EMBED_DIM", "768")
+    assert _embedding_dim() == 768
+
+
+def test_reset_model_clears_cache(monkeypatch) -> None:
+    """reset_model() sets the cached model back to None."""
+    monkeypatch.delenv("CONTEXTWELL_EMBED_PROVIDER", raising=False)
+    embedder_module._model = object()  # noqa: SLF001  # inject a sentinel
+    reset_model()
+    assert embedder_module._model is None  # noqa: SLF001
+
+
+def test_dimension_mismatch_raises(tmp_path, monkeypatch) -> None:
+    """_get_table raises ValueError when the table dim doesn't match CONTEXTWELL_EMBED_DIM."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    # Create table with dim=8
+    monkeypatch.setenv("CONTEXTWELL_EMBED_DIM", "8")
+    m = Memory(content="dim test", type="fact", scope="global")
+    m.embedding = [0.0] * 8
+    store(m)
+
+    # Re-open with a different dim — must raise
+    monkeypatch.setenv("CONTEXTWELL_EMBED_DIM", "16")
+    with pytest.raises(ValueError, match="Embedding dimension mismatch"):
+        store_module._get_table()  # noqa: SLF001

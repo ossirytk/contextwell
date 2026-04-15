@@ -64,7 +64,7 @@ Wire up the existing `search_candidates` RRF function in `_core` with a BM25 spa
 
 ---
 
-## 6. Configurable Embedding Model
+## ~~6. Configurable Embedding Model~~ ✅
 
 Make the model name and dimension configurable without patching source.
 
