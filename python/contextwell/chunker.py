@@ -53,7 +53,7 @@ def chunk_text(
     if overlap is None:
         overlap = _chunk_overlap()
     if overlap < 0 or overlap >= max_words:
-        if default_overlap and overlap >= max_words:
+        if default_overlap:
             overlap = max_words - 1
         else:
             msg = "overlap must satisfy 0 <= overlap < max_words"

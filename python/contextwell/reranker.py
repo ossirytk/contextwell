@@ -47,6 +47,7 @@ def rerank(query: str, rows: list[dict], k: int) -> list[dict]:
         return rows[:k]
     try:
         pairs = [(query, str(row.get("content", ""))) for row in rows]
+        # Handle both ndarray-like and plain list predictions across model versions.
         predictions = model.predict(pairs)
         scores: list[float] = predictions.tolist() if hasattr(predictions, "tolist") else list(predictions)
         ranked = sorted(zip(rows, scores, strict=True), key=lambda x: x[1], reverse=True)
