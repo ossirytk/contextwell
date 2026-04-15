@@ -76,7 +76,7 @@ Make the model name and dimension configurable without patching source.
 
 ---
 
-## 7. Memory Compression / Summarization
+## ✅ 7. Memory Compression / Summarization
 
 Mirrors Copilot's `/compact` for the memory store.
 

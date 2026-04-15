@@ -69,6 +69,14 @@ def _ensure_updated_at_column(table: Table) -> None:
         table.add_columns({"updated_at": "''"})
 
 
+def _ensure_parent_ids_column(table: Table) -> None:
+    """Add the parent_ids column to existing tables that pre-date this field."""
+    if "parent_ids" not in {f.name for f in table.schema}:
+        import pyarrow as pa  # noqa: PLC0415
+
+        table.add_columns({"parent_ids": pa.array([[]], type=pa.list_(pa.string()))[0]})
+
+
 def _get_table():  # noqa: ANN202
     import pyarrow as pa  # noqa: PLC0415
 
@@ -87,6 +95,7 @@ def _get_table():  # noqa: ANN202
                 pa.field("source", pa.string()),
                 pa.field("created_at", pa.string()),
                 pa.field("updated_at", pa.string()),
+                pa.field("parent_ids", pa.list_(pa.string())),
                 pa.field("embedding", pa.list_(pa.float32(), dim)),
             ]
         )
@@ -96,6 +105,7 @@ def _get_table():  # noqa: ANN202
     tbl = db.open_table("memories")
     _ensure_scalar_indexes(tbl)
     _ensure_updated_at_column(tbl)
+    _ensure_parent_ids_column(tbl)
     _check_embedding_dim(tbl, dim)
     return tbl
 
@@ -135,6 +145,8 @@ def store(memory: Memory) -> str:
                 "tags": memory.tags,
                 "source": memory.source or "",
                 "created_at": memory.created_at.isoformat(),
+                "updated_at": "",
+                "parent_ids": memory.parent_ids,
                 "embedding": memory.embedding,
             }
         ]
@@ -293,3 +305,78 @@ def update(
     table.update(where=where, values=values)
     # Row count doesn't change on updates, so verify existence by re-querying.
     return bool(table.search().where(where).limit(1).to_list())
+
+
+def find_cluster(
+    embedding: list[float],
+    threshold: float = 0.85,
+    scope: str = "",
+    memory_type: str = "",
+    project_id: str = "",
+    k: int = 50,
+) -> list[dict]:
+    """Return memories whose cosine similarity to *embedding* meets *threshold*.
+
+    Searches up to *k* candidates. Results are sorted by descending similarity
+    and include only rows with similarity >= threshold.
+    """
+    table = _get_table()
+    clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id)
+    q = table.search(embedding).metric("cosine").limit(k)
+    if clauses:
+        q = q.where(" AND ".join(clauses))
+    results = []
+    for row in q.to_list():
+        distance: float = max(0.0, row.get("_distance", 1.0))
+        if (1.0 - distance) >= threshold:
+            results.append(_clean(row))
+    return results
+
+
+def compress(
+    summary_embedding: list[float],
+    summary_content: str,
+    memory_type: str = "fact",
+    scope: str = "global",
+    project_id: str = "",
+    threshold: float = 0.85,
+    tags: list[str] | None = None,
+    source: str = "",
+) -> tuple[str, list[str]]:
+    """Replace a cluster of similar memories with a single summary memory.
+
+    Finds all memories whose cosine similarity to *summary_embedding* meets
+    *threshold*, deletes them, and stores *summary_content* as a new memory
+    whose ``parent_ids`` records the IDs of every compressed memory.
+
+    Returns ``(new_memory_id, compressed_ids)``. If fewer than 2 memories are
+    found in the cluster, nothing is changed and returns ``("", [])``.
+    """
+    from contextwell.schema import Memory as _Memory  # noqa: PLC0415
+
+    cluster = find_cluster(
+        summary_embedding,
+        threshold=threshold,
+        scope=scope,
+        memory_type=memory_type,
+        project_id=project_id,
+    )
+    if len(cluster) < 2:  # noqa: PLR2004
+        return "", []
+
+    source_ids = [row["id"] for row in cluster]
+    for mid in source_ids:
+        forget(mid)
+
+    summary = _Memory(
+        content=summary_content,
+        type=memory_type,  # type: ignore[arg-type]
+        scope=scope,  # type: ignore[arg-type]
+        project_id=project_id or None,
+        tags=tags or [],
+        source=source or None,
+        parent_ids=source_ids,
+    )
+    summary.embedding = summary_embedding
+    new_id = store(summary)
+    return new_id, source_ids

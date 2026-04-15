@@ -266,6 +266,65 @@ def remember_file(
     )
 
 
+@mcp.tool
+def compress_memories(
+    summary: str,
+    type: MemoryType | Literal[""] = "",  # noqa: A002
+    scope: MemoryScope | Literal[""] = "",
+    threshold: float = 0.85,
+    tags: list[str] | None = None,
+    source: str = "",
+) -> str:
+    """Compress semantically similar memories into a single summary memory.
+
+    Finds all stored memories whose cosine similarity to *summary* meets
+    *threshold*, deletes them, and stores *summary* as a new memory whose
+    ``parent_ids`` records the IDs of every compressed memory.
+
+    Use this after a long session to condense redundant or overlapping
+    memories — similar to Copilot's /compact but scoped to the memory store.
+
+    Args:
+        summary: The condensed text that replaces the cluster. Write this
+                 yourself to capture the essential meaning of the memories
+                 you want to collapse.
+        type: Restrict the cluster search to this memory type.
+        scope: Restrict the cluster search to this scope. For 'project',
+               git root is auto-detected from server CWD.
+        threshold: Minimum cosine similarity (0-1) to include a memory in
+                   the cluster. Default 0.85 is intentionally conservative.
+        tags: Tags applied to the new summary memory.
+        source: Optional source reference for the new summary memory.
+    """
+    from contextwell.embedder import embed  # noqa: PLC0415
+    from contextwell.store import compress as _compress  # noqa: PLC0415
+
+    project_id = _project_id_for_scope(scope) or ""
+    embedding = embed(summary)
+    new_id, compressed_ids = _compress(
+        summary_embedding=embedding,
+        summary_content=summary,
+        memory_type=type,
+        scope=scope,
+        project_id=project_id,
+        threshold=threshold,
+        tags=tags,
+        source=source,
+    )
+    if not new_id:
+        return (
+            f"No cluster found — fewer than 2 memories have cosine similarity "
+            f"≥ {threshold:.0%} to the provided summary. Nothing was changed."
+        )
+    scope_label = f"project:{project_id[:8]}" if project_id else (scope or "global")
+    n = len(compressed_ids)
+    short_ids = ", ".join(f"#{mid[:8]}" for mid in compressed_ids)
+    return (
+        f"Compressed {n} memor{'y' if n == 1 else 'ies'} [{scope_label}] "
+        f"into #{new_id[:8]}. Replaced: {short_ids}."
+    )
+
+
 def run() -> None:
     mcp.run()
 

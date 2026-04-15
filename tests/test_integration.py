@@ -15,7 +15,17 @@ from contextwell.bm25 import bm25_search
 from contextwell.embedder import _model_name, reset_model
 from contextwell.project import detect_project_id
 from contextwell.schema import Memory
-from contextwell.store import _embedding_dim, check_duplicate, forget, recall, scan, store, update
+from contextwell.store import (
+    _embedding_dim,
+    check_duplicate,
+    compress,
+    find_cluster,
+    forget,
+    recall,
+    scan,
+    store,
+    update,
+)
 
 _EMBEDDING_DIM = 384
 
@@ -401,3 +411,104 @@ def test_dimension_mismatch_raises(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CONTEXTWELL_EMBED_DIM", "16")
     with pytest.raises(ValueError, match="Embedding dimension mismatch"):
         store_module._get_table()  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# find_cluster / compress tests
+# ---------------------------------------------------------------------------
+
+def test_find_cluster_returns_similar(tmp_path, monkeypatch) -> None:
+    """find_cluster returns memories whose cosine similarity meets the threshold."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    emb = _test_embed("similar memory")
+
+    m1 = Memory(content="alpha", type="fact", scope="global")
+    m1.embedding = emb
+    m2 = Memory(content="beta", type="fact", scope="global")
+    m2.embedding = emb
+    store(m1)
+    store(m2)
+
+    cluster = find_cluster(emb, threshold=0.99)
+    ids = {row["id"] for row in cluster}
+    assert m1.id in ids
+    assert m2.id in ids
+
+
+def test_find_cluster_excludes_dissimilar(tmp_path, monkeypatch) -> None:
+    """find_cluster does not return memories with low cosine similarity."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    emb_a = _test_embed("rust programming language")
+    emb_b = _test_embed("zzz_completely_unrelated_xyz_999")
+
+    m = Memory(content="rust", type="fact", scope="global")
+    m.embedding = emb_b
+    store(m)
+
+    cluster = find_cluster(emb_a, threshold=0.99)
+    ids = {row["id"] for row in cluster}
+    assert m.id not in ids
+
+
+def test_compress_replaces_cluster(tmp_path, monkeypatch) -> None:
+    """compress() stores a summary memory with parent_ids set to the original IDs."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    emb = _test_embed("shared embedding vector")
+
+    ids = []
+    for i in range(3):
+        m = Memory(content=f"source {i}", type="fact", scope="global")
+        m.embedding = emb
+        ids.append(store(m))
+
+    new_id, compressed = compress(
+        summary_embedding=emb,
+        summary_content="consolidated summary",
+        threshold=0.99,
+    )
+    assert new_id != ""
+    assert set(compressed) == set(ids)
+
+    # The new memory should have parent_ids recorded
+    results = scan(scope="global")
+    summary_rows = [r for r in results if r["id"] == new_id]
+    assert len(summary_rows) == 1
+    assert set(summary_rows[0]["parent_ids"]) == set(ids)
+
+
+def test_compress_preserves_count(tmp_path, monkeypatch) -> None:
+    """After compress(), total row count decreases by (N - 1)."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    emb = _test_embed("compression count test")
+
+    for i in range(4):
+        m = Memory(content=f"item {i}", type="fact", scope="global")
+        m.embedding = emb
+        store(m)
+
+    before = len(scan(scope="global"))
+    compress(summary_embedding=emb, summary_content="summary", threshold=0.99)
+    after = len(scan(scope="global"))
+
+    assert after == before - 3  # 4 removed, 1 added → net -3
+
+
+def test_compress_too_few_returns_empty(tmp_path, monkeypatch) -> None:
+    """compress() returns ('', []) when fewer than 2 memories match."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    emb_a = _test_embed("unique embedding for compress")
+    emb_b = _test_embed("zzz_nothing_similar_at_all_999")
+
+    m = Memory(content="lone ranger", type="fact", scope="global")
+    m.embedding = emb_b
+    store(m)
+
+    new_id, compressed = compress(
+        summary_embedding=emb_a,
+        summary_content="should not be stored",
+        threshold=0.99,
+    )
+    assert new_id == ""
+    assert compressed == []
+    # Original memory should still exist
+    assert any(r["id"] == m.id for r in scan(scope="global"))

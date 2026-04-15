@@ -22,3 +22,4 @@ class Memory:
     id: str = field(default_factory=lambda: str(uuid4()))
     embedding: list[float] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    parent_ids: list[str] = field(default_factory=list)

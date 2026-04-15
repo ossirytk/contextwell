@@ -101,7 +101,7 @@ unfixable = [
 ban-relative-imports = "all"
 
 [tool.ruff.lint.pylint]
-max-args = 7
+max-args = 8
 
 [tool.coverage.run]
 source = ["contextwell"]
