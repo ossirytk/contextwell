@@ -103,6 +103,7 @@ def recall(
     type: MemoryType | Literal[""] = "",  # noqa: A002
     tags: list[str] | None = None,
     k: int = 10,
+    rerank: bool = False,
 ) -> list[dict]:
     """Search memories by meaning using semantic similarity.
 
@@ -113,13 +114,26 @@ def recall(
         type: Filter by memory type. Empty means all types.
         tags: Only return memories that have at least one of these tags.
         k: Maximum number of results to return.
+        rerank: When True, fetch up to k*3 candidates then re-score with a
+                cross-encoder (cross-encoder/ms-marco-MiniLM-L-6-v2) for
+                higher-precision ordering. Adds ~100-300 ms latency.
+                Most beneficial when k > 5.
     """
     from contextwell.embedder import embed  # noqa: PLC0415
     from contextwell.store import recall as _recall  # noqa: PLC0415
 
     embedding = embed(query)
     project_id = _project_id_for_scope(scope) or ""
-    return _recall(embedding, query=query, scope=scope, memory_type=type, project_id=project_id or "", tags=tags, k=k)
+    return _recall(
+        embedding,
+        query=query,
+        scope=scope,
+        memory_type=type,
+        project_id=project_id or "",
+        tags=tags,
+        k=k,
+        rerank=rerank,
+    )
 
 
 @mcp.tool

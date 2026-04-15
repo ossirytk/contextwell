@@ -120,7 +120,7 @@ Add `since` / `until` parameters to `list_memories`.
 
 ---
 
-## 11. Cross-Encoder Reranking
+## ✅ 11. Cross-Encoder Reranking
 
 After initial vector recall, re-score with a cross-encoder for higher-precision ordering.
 

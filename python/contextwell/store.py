@@ -205,23 +205,37 @@ def recall(
     project_id: str = "",
     tags: list[str] | None = None,
     k: int = 10,
+    rerank: bool = False,
 ) -> list[dict]:
     """Vector search with optional metadata filters. Returns top-k results.
 
     When the ``CONTEXTWELL_HYBRID`` environment variable is set to ``"1"``
     and *query* is provided, BM25 sparse retrieval is fused with vector
     search via Reciprocal Rank Fusion (requires the ``rank-bm25`` package).
+
+    When *rerank* is ``True`` and *query* is provided, the initial candidate
+    set is expanded to ``k * 3`` results and then re-scored by a cross-encoder
+    (``cross-encoder/ms-marco-MiniLM-L-6-v2`` by default) for higher precision.
     """
     table = _get_table()
     clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id, tags=tags)
 
-    if os.getenv("CONTEXTWELL_HYBRID") == "1" and query:
-        return _recall_hybrid(table, embedding, query, clauses, k)
+    candidate_k = max(k * 3, 20) if (rerank and query) else k
 
-    q = table.search(embedding).limit(k)
-    if clauses:
-        q = q.where(" AND ".join(clauses))
-    return [_clean(row) for row in q.to_list()]
+    if os.getenv("CONTEXTWELL_HYBRID") == "1" and query:
+        results = _recall_hybrid(table, embedding, query, clauses, candidate_k)
+    else:
+        q = table.search(embedding).limit(candidate_k)
+        if clauses:
+            q = q.where(" AND ".join(clauses))
+        results = [_clean(row) for row in q.to_list()]
+
+    if rerank and query:
+        from contextwell.reranker import rerank as _rerank  # noqa: PLC0415
+
+        return _rerank(query, results, k)
+
+    return results[:k]
 
 
 def scan(

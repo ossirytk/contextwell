@@ -802,3 +802,123 @@ def test_export_respects_filters(tmp_path, monkeypatch) -> None:
     data = _json.loads(result)
     assert len(data) == 1
     assert data[0]["type"] == "code"
+
+
+# ---------------------------------------------------------------------------
+# Item 11: cross-encoder reranking tests
+# ---------------------------------------------------------------------------
+
+class _MockCrossEncoder:
+    """Deterministic mock: scores by reverse position in the input list."""
+
+    def __init__(self, model_name: str) -> None:
+        pass
+
+    def predict(self, pairs: list[tuple[str, str]]):
+        import numpy as np  # noqa: PLC0415
+
+        # Score each pair: longer content = higher score (deterministic, testable)
+        scores = [float(len(passage)) for _, passage in pairs]
+        return np.array(scores)
+
+
+def test_rerank_reorders_by_score(monkeypatch) -> None:
+    """rerank() returns rows sorted by cross-encoder score, highest first."""
+    import contextwell.reranker as reranker_module  # noqa: PLC0415
+    from contextwell.reranker import rerank  # noqa: PLC0415
+
+    monkeypatch.setattr(reranker_module, "_reranker", None)
+    monkeypatch.setattr(
+        "contextwell.reranker._get_reranker",
+        lambda: _MockCrossEncoder("mock"),
+    )
+
+    rows = [
+        {"id": "a", "content": "short"},
+        {"id": "b", "content": "much longer content here"},
+        {"id": "c", "content": "medium length content"},
+    ]
+    result = rerank("query", rows, k=3)
+    # mock scores by len(content), so b > c > a
+    assert result[0]["id"] == "b"
+    assert result[1]["id"] == "c"
+    assert result[2]["id"] == "a"
+
+
+def test_rerank_respects_k(monkeypatch) -> None:
+    """rerank() returns at most k results."""
+    import contextwell.reranker as reranker_module  # noqa: PLC0415
+    from contextwell.reranker import rerank  # noqa: PLC0415
+
+    monkeypatch.setattr(reranker_module, "_reranker", None)
+    monkeypatch.setattr(
+        "contextwell.reranker._get_reranker",
+        lambda: _MockCrossEncoder("mock"),
+    )
+
+    rows = [{"id": str(i), "content": f"content {i}"} for i in range(10)]
+    result = rerank("query", rows, k=3)
+    assert len(result) == 3
+
+
+def test_rerank_empty_rows() -> None:
+    """rerank() returns empty list when given no rows."""
+    from contextwell.reranker import rerank  # noqa: PLC0415
+
+    assert rerank("query", [], k=5) == []
+
+
+def test_rerank_blank_query() -> None:
+    """rerank() returns rows[:k] unchanged when query is empty."""
+    from contextwell.reranker import rerank  # noqa: PLC0415
+
+    rows = [{"id": str(i), "content": f"x {i}"} for i in range(5)]
+    result = rerank("", rows, k=3)
+    assert result == rows[:3]
+
+
+def test_recall_with_rerank(tmp_path, monkeypatch) -> None:
+    """recall(rerank=True) calls the reranker and returns k results."""
+    import contextwell.reranker as reranker_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    monkeypatch.setattr(reranker_module, "_reranker", None)
+    monkeypatch.setattr(
+        "contextwell.reranker._get_reranker",
+        lambda: _MockCrossEncoder("mock"),
+    )
+
+    for i in range(6):
+        m = Memory(content=f"memory number {i}", type="fact", scope="global")
+        m.embedding = _test_embed(f"memory number {i}")
+        store(m)
+
+    emb = _test_embed("memory")
+    results = recall(emb, query="memory", scope="global", k=3, rerank=True)
+    assert len(results) == 3
+
+
+def test_recall_rerank_false_unchanged(tmp_path, monkeypatch) -> None:
+    """recall(rerank=False) does not invoke the reranker."""
+    import contextwell.reranker as reranker_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    called = []
+
+    def _fail(*_args, **_kwargs) -> None:
+        called.append(True)
+        msg = "reranker should not be called"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(reranker_module, "_reranker", None)
+    monkeypatch.setattr("contextwell.reranker._get_reranker", _fail)
+
+    for i in range(3):
+        m = Memory(content=f"item {i}", type="fact", scope="global")
+        m.embedding = _test_embed(f"item {i}")
+        store(m)
+
+    emb = _test_embed("item")
+    recall(emb, query="item", scope="global", k=3, rerank=False)
+    assert not called
