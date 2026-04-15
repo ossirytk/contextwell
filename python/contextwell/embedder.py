@@ -3,7 +3,7 @@
 The embedding provider and model are configurable via environment variables:
 
 - ``CONTEXTWELL_EMBED_PROVIDER`` — ``"sentence-transformers"`` (default) or ``"openai"``
-- ``CONTEXTWELL_EMBED_MODEL`` — model name; defaults to ``"all-MiniLM-L6-v2"``
+- ``CONTEXTWELL_EMBED_MODEL`` — model name; defaults to ``"BAAI/bge-small-en-v1.5"``
   for sentence-transformers, or ``"text-embedding-3-small"`` for OpenAI
 """
 
@@ -22,7 +22,7 @@ def _model_name() -> str:
     """Return the configured embedding model name."""
     if _provider() == "openai":
         return os.getenv("CONTEXTWELL_EMBED_MODEL", "text-embedding-3-small")
-    return os.getenv("CONTEXTWELL_EMBED_MODEL", "all-MiniLM-L6-v2")
+    return os.getenv("CONTEXTWELL_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
 
 
 def _get_model():  # noqa: ANN202

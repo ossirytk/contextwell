@@ -105,12 +105,17 @@ Core dependencies (installed with `uv sync`):
 | Package | Purpose |
 |---------|---------|
 | `fastmcp` | MCP server framework |
-| `sentence-transformers` | Embedding model (`all-MiniLM-L6-v2`, 384-dim) |
+| `sentence-transformers` | Embedding model (`BAAI/bge-small-en-v1.5`, 384-dim, 512-token context) |
 | `lancedb==0.30.0` | Vector store with scalar index support |
 
 > **Note:** `lancedb` is pinned to `0.30.0` — newer versions may lack a Windows wheel.
 
-Optional, for future hybrid search:
+> **Upgrading from `all-MiniLM-L6-v2`:** The default model changed to `BAAI/bge-small-en-v1.5`
+> in v0.1 (same 384-dim, but a different embedding space). Vectors from the two models are
+> incompatible. If you have an existing store, delete `~/.contextwell/memories` and re-add
+> your memories, or pin the old model with `CONTEXTWELL_EMBED_MODEL=all-MiniLM-L6-v2`.
+
+Optional, for hybrid search:
 
 ```powershell
 uv add rank-bm25   # sparse retrieval (BM25) for RRF hybrid search

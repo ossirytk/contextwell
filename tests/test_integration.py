@@ -350,7 +350,7 @@ def test_model_name_default(monkeypatch) -> None:
     """Default model name is all-MiniLM-L6-v2 when no env var is set."""
     monkeypatch.delenv("CONTEXTWELL_EMBED_MODEL", raising=False)
     monkeypatch.delenv("CONTEXTWELL_EMBED_PROVIDER", raising=False)
-    assert _model_name() == "all-MiniLM-L6-v2"
+    assert _model_name() == "BAAI/bge-small-en-v1.5"
 
 
 def test_model_name_from_env(monkeypatch) -> None:
