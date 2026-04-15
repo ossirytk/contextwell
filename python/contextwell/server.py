@@ -53,6 +53,9 @@ def remember(
         clean_source = rest or None
 
     project_id = detect_project_id(cwd) if scope == "project" else None
+    if scope == "project" and not project_id:
+        msg = "Unable to detect project context for scope='project'."
+        raise ValueError(msg)
     memory = Memory(
         content=content,
         type=type,
@@ -89,6 +92,9 @@ def recall(
 
     embedding = embed(query)
     project_id = detect_project_id() if scope == "project" else ""
+    if scope == "project" and not project_id:
+        msg = "Unable to detect project context for scope='project'."
+        raise ValueError(msg)
     return _recall(embedding, scope=scope, memory_type=type, project_id=project_id or "", k=k)
 
 
@@ -125,6 +131,9 @@ def list_memories(
     from contextwell.store import scan  # noqa: PLC0415
 
     project_id = detect_project_id() if scope == "project" else ""
+    if scope == "project" and not project_id:
+        msg = "Unable to detect project context for scope='project'."
+        raise ValueError(msg)
     return scan(scope=scope, memory_type=type, project_id=project_id or "", limit=limit)
 
 

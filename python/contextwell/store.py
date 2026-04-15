@@ -12,6 +12,28 @@ DB_PATH = Path.home() / ".contextwell" / "memories"
 _EMBEDDING_DIM = 384
 
 
+def _escape_literal(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _ensure_scalar_indexes(table) -> None:  # noqa: ANN001
+    indexed_columns = {column for index in table.list_indices() for column in index.columns}
+    for column in ("scope", "type", "project_id"):
+        if column not in indexed_columns:
+            table.create_scalar_index(column)
+
+
+def _where_clauses(scope: str = "", memory_type: str = "", project_id: str = "") -> list[str]:
+    clauses = []
+    if scope:
+        clauses.append(f"scope = '{_escape_literal(scope)}'")
+    if memory_type:
+        clauses.append(f"type = '{_escape_literal(memory_type)}'")
+    if project_id:
+        clauses.append(f"project_id = '{_escape_literal(project_id)}'")
+    return clauses
+
+
 def _get_db():  # noqa: ANN202
     import lancedb  # noqa: PLC0415
 
@@ -39,11 +61,11 @@ def _get_table():  # noqa: ANN202
             ]
         )
         tbl = db.create_table("memories", schema=schema)
-        tbl.create_scalar_index("scope")
-        tbl.create_scalar_index("type")
-        tbl.create_scalar_index("project_id")
+        _ensure_scalar_indexes(tbl)
         return tbl
-    return db.open_table("memories")
+    tbl = db.open_table("memories")
+    _ensure_scalar_indexes(tbl)
+    return tbl
 
 
 def _clean(row: dict) -> dict:
@@ -84,13 +106,7 @@ def recall(
     """Vector search with optional metadata filters. Returns top-k results."""
     table = _get_table()
 
-    clauses = []
-    if scope:
-        clauses.append(f"scope = '{scope}'")
-    if memory_type:
-        clauses.append(f"type = '{memory_type}'")
-    if project_id:
-        clauses.append(f"project_id = '{project_id}'")
+    clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id)
 
     query = table.search(embedding).limit(k)
     if clauses:
@@ -108,13 +124,7 @@ def scan(
     """Full-table scan with optional metadata filters. No vector required."""
     table = _get_table()
 
-    clauses = []
-    if scope:
-        clauses.append(f"scope = '{scope}'")
-    if memory_type:
-        clauses.append(f"type = '{memory_type}'")
-    if project_id:
-        clauses.append(f"project_id = '{project_id}'")
+    clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id)
 
     query = table.search().limit(limit)
     if clauses:
@@ -127,5 +137,5 @@ def forget(memory_id: str) -> bool:
     """Delete a memory by ID. Returns True if found and deleted."""
     table = _get_table()
     before = table.count_rows()
-    table.delete(f"id = '{memory_id}'")
+    table.delete(f"id = '{_escape_literal(memory_id)}'")
     return table.count_rows() < before
