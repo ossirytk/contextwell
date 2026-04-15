@@ -5,7 +5,7 @@ Items are roughly ordered by priority. Cross off when done.
 
 ---
 
-## 1. Markdown File Ingestion
+## ~~1. Markdown File Ingestion~~ ✅
 
 **Tool**: `remember_file(path, scope, tags, type_hint)`
 

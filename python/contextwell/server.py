@@ -140,6 +140,68 @@ def list_memories(
     return scan(scope=scope, memory_type=type, project_id=project_id or "", limit=limit)
 
 
+@mcp.tool
+def remember_file(
+    path: str,
+    scope: MemoryScope = "global",
+    tags: list[str] | None = None,
+    type_hint: MemoryType = "fact",
+    source: str = "",
+) -> str:
+    """Ingest a markdown file and store its sections as individual memories.
+
+    Splits on ## / ### headers (each section becomes one memory). Falls back to
+    paragraph-based chunking (~800 chars) for files without headers. YAML
+    front-matter (---) sets default type, tags, and scope for the whole file.
+
+    Args:
+        path: Absolute or relative path to the markdown file to import.
+        scope: 'project' (tied to current git repo) or 'global'.
+               For project scope, prefix source with 'cwd:<path>' to set
+               the working directory used for git root detection.
+        tags: Additional tags applied to every memory created from this file.
+        type_hint: Fallback memory type when no heuristic matches a section title.
+                   Section titles containing 'decision', 'todo', 'code', etc. are
+                   detected automatically.
+        source: Optional origin hint. Supports 'cwd:<path>' prefix (same as
+                remember) to set the working directory for project-scope detection.
+    """
+    from contextwell.embedder import embed  # noqa: PLC0415
+    from contextwell.markdown_import import parse  # noqa: PLC0415
+    from contextwell.store import store  # noqa: PLC0415
+
+    cwd: str | None = None
+    if source and source.startswith("cwd:"):
+        cwd, _, source = source[4:].partition("|")
+        source = source or ""
+
+    project_id = _project_id_for_scope(scope, cwd, allow_source_hint=True)
+
+    try:
+        chunks = parse(path, default_tags=tags or [], default_type=type_hint)
+    except (OSError, ValueError) as exc:
+        return f"Error reading file: {exc}"
+
+    ids: list[str] = []
+    for chunk in chunks:
+        memory = Memory(
+            content=chunk.content,
+            type=chunk.type,  # type: ignore[arg-type]
+            scope=scope,
+            project_id=project_id,
+            tags=chunk.tags,
+            source=source or chunk.source,
+        )
+        memory.embedding = embed(chunk.content)
+        ids.append(store(memory))
+
+    scope_label = f"project:{project_id[:8]}" if project_id else scope
+    return (
+        f"Imported {len(ids)} memor{'y' if len(ids) == 1 else 'ies'} "
+        f"from '{path}' [{type_hint}|{scope_label}]: " + ", ".join(f"#{mid[:8]}" for mid in ids)
+    )
+
+
 def run() -> None:
     mcp.run()
 

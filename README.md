@@ -15,7 +15,7 @@ The Python layer handles the MCP protocol (FastMCP), embedding models, and the L
 | `remember` | Store a new memory — fact, decision, code snippet, todo, or chat extract |
 | `recall` | Search memories by meaning using semantic similarity |
 | `forget` | Delete a memory by ID |
-| `list_memories` | Browse stored memories with optional scope and type filters |
+| `remember_file` | Import a markdown file; splits on headers or paragraphs, stores each chunk as a memory |
 
 Memories can be scoped as `global` (across all projects) or `project` (tied to the current git repository, auto-detected from the working directory).
 

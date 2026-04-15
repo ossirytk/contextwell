@@ -16,12 +16,7 @@ _EMBEDDING_DIM = 384
 
 def _escape_literal(value: str) -> str:
     """Escape quote and control chars for LanceDB filter literals."""
-    return (
-        value.replace("'", "''")
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-        .replace("\t", "\\t")
-    )
+    return value.replace("'", "''").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
 
 
 def _ensure_scalar_indexes(table: Table) -> None:
