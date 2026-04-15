@@ -41,7 +41,9 @@ def chunk_text(
         text: The text to split.
         max_words: Maximum words per chunk. Defaults to ``CONTEXTWELL_CHUNK_SIZE``.
         overlap: Number of words to repeat at the start of each subsequent
-                 chunk. Defaults to ``CONTEXTWELL_CHUNK_OVERLAP``.
+                 chunk. Defaults to ``CONTEXTWELL_CHUNK_OVERLAP``. When the
+                 default overlap is larger than max_words, it is clamped to
+                 ``max_words - 1``.
     """
     default_overlap = overlap is None
     if max_words is None:

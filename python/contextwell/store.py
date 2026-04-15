@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import UTC, date, datetime, time
 from pathlib import Path
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
     from contextwell.schema import Memory
 
 DB_PATH = Path.home() / ".contextwell" / "memories"
+_LOG = logging.getLogger(__name__)
 
 
 def _embedding_dim() -> int:
@@ -221,6 +223,7 @@ def _recall_hybrid(
     try:
         sparse_ids = bm25_search(corpus_rows, query, candidate_k)
     except ImportError:
+        _LOG.warning("Hybrid BM25 dependency unavailable; falling back to dense-only recall.")
         return [id_to_row[mid] for mid in dense_ids if mid in id_to_row][:k]
 
     fused = search_candidates(dense_ids, sparse_ids)

@@ -390,10 +390,10 @@ def test_hybrid_recall_falls_back_when_rank_bm25_missing(tmp_path, monkeypatch) 
     m.embedding = _test_embed(m.content)
     store(m)
 
-    def _raise_import_error(_rows: list[dict], _query: str, _k: int) -> list[str]:
+    def _mock_bm25_import_failure(_rows: list[dict], _query: str, _k: int) -> list[str]:
         raise ImportError
 
-    monkeypatch.setattr(bm25_module, "bm25_search", _raise_import_error)
+    monkeypatch.setattr(bm25_module, "bm25_search", _mock_bm25_import_failure)
     results = recall(_test_embed("fallback test"), query="fallback test", k=5)
     assert len(results) == 1
     assert results[0]["id"] == m.id
@@ -978,11 +978,11 @@ def test_recall_dedup_after_rerank(tmp_path, monkeypatch) -> None:
     second.chunk_of = group
     store(second)
 
-    def _prefer_keyword(_query: str, rows: list[dict], k: int) -> list[dict]:
+    def _mock_rerank_prefer_keyword(_query: str, rows: list[dict], k: int) -> list[dict]:
         ranked = sorted(rows, key=lambda row: "preferred" not in str(row.get("content", "")))
         return ranked[:k]
 
-    monkeypatch.setattr(reranker_module, "rerank", _prefer_keyword)
+    monkeypatch.setattr(reranker_module, "rerank", _mock_rerank_prefer_keyword)
     results = recall(base_emb, query="chunk topic", scope="global", k=2, rerank=True)
     grouped = [row for row in results if row.get("chunk_of") == group]
     assert len(grouped) == 1
