@@ -44,6 +44,7 @@ def remember(
     scope: MemoryScope = "global",
     tags: list[str] | None = None,
     source: str = "",
+    allow_duplicate: bool = False,
 ) -> str:
     """Store a new memory.
 
@@ -56,9 +57,10 @@ def remember(
                 For project-scoped memories, prefix with 'cwd:<path>' to set
                 the working directory used for git root detection, e.g.
                 'cwd:D:/myproject'. Otherwise the server CWD is used.
+        allow_duplicate: Skip the near-duplicate check and store regardless.
     """
     from contextwell.embedder import embed  # noqa: PLC0415
-    from contextwell.store import store  # noqa: PLC0415
+    from contextwell.store import check_duplicate, store  # noqa: PLC0415
 
     cwd: str | None = None
     clean_source: str | None = source or None
@@ -67,6 +69,19 @@ def remember(
         clean_source = rest or None
 
     project_id = _project_id_for_scope(scope, cwd, allow_source_hint=True)
+    embedding = embed(content)
+
+    if not allow_duplicate:
+        duplicate = check_duplicate(embedding)
+        if duplicate:
+            dup_id = duplicate["id"]
+            snippet = duplicate["content"][:80]
+            return (
+                f"⚠ Near-duplicate detected (similarity ≥ 95%): "
+                f"#{dup_id[:8]} — {snippet}. "
+                f"Pass allow_duplicate=True to store anyway."
+            )
+
     memory = Memory(
         content=content,
         type=type,
@@ -75,7 +90,7 @@ def remember(
         tags=tags or [],
         source=clean_source,
     )
-    memory.embedding = embed(content)
+    memory.embedding = embedding
     memory_id = store(memory)
     scope_label = f"project:{project_id[:8]}" if project_id else scope
     return f"Remembered [{type}|{scope_label}] #{memory_id[:8]}: {content[:80]}"
@@ -145,7 +160,6 @@ def list_memories(
 
 
 @mcp.tool
-@mcp.tool
 def update(
     memory_id: str,
     content: str | None = None,
@@ -190,6 +204,7 @@ def update(
     return f"No memory found with ID {memory_id[:8]}."
 
 
+@mcp.tool
 def remember_file(
     path: str,
     scope: MemoryScope = "global",

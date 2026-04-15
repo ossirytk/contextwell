@@ -164,6 +164,27 @@ def forget(memory_id: str) -> bool:
     return table.count_rows() < before
 
 
+def check_duplicate(
+    embedding: list[float],
+    threshold: float = 0.95,
+) -> dict | None:
+    """Return the most similar memory if cosine similarity meets threshold, else None.
+
+    Uses cosine distance (distance = 1 - similarity). Returns the cleaned row dict
+    of the best match when similarity >= threshold, or None otherwise.
+    Returns None immediately when the store is empty.
+    """
+    table = _get_table()
+    results = table.search(embedding).metric("cosine").limit(1).to_list()
+    if not results:
+        return None
+    top = results[0]
+    distance: float = max(0.0, top.get("_distance", 1.0))
+    if distance < (1.0 - threshold):
+        return _clean(top)
+    return None
+
+
 def update(
     memory_id: str,
     content: str | None = None,

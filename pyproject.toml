@@ -84,7 +84,7 @@ select = [
     "FURB",
     "RUF",
 ]
-ignore = ["FBT001", "S603", "G004", "S607", "COM812"]
+ignore = ["FBT001", "FBT002", "S603", "G004", "S607", "COM812"]
 unfixable = [
     # Don't touch unused imports
     "F401",

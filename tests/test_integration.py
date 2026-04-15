@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 import contextwell.store as store_module
 from contextwell.project import detect_project_id
 from contextwell.schema import Memory
-from contextwell.store import forget, recall, scan, store, update
+from contextwell.store import check_duplicate, forget, recall, scan, store, update
 
 _EMBEDDING_DIM = 384
 
@@ -205,3 +205,59 @@ def test_update_preserves_created_at(tmp_path, monkeypatch) -> None:
     row = scan(limit=1)[0]
     assert row["created_at"] == original_created_at
     assert row["updated_at"] != ""
+
+
+# --- Item 4: Deduplication ---
+
+
+def test_check_duplicate_found(tmp_path, monkeypatch) -> None:
+    """check_duplicate returns the matching row when similarity >= threshold."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="Use JWT for auth", type="decision", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    # Same embedding → cosine distance = 0 → similarity = 1.0 → duplicate
+    result = check_duplicate(_test_embed(m.content), threshold=0.95)
+    assert result is not None
+    assert result["id"] == m.id
+    assert result["content"] == m.content
+
+
+def test_check_duplicate_not_found(tmp_path, monkeypatch) -> None:
+    """check_duplicate returns None for content that is not similar enough."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="Use JWT for auth", type="decision", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    # Different content → very different SHA-256-based vector → not a duplicate
+    result = check_duplicate(_test_embed("Deploy to production every Friday"), threshold=0.95)
+    assert result is None
+
+
+def test_check_duplicate_empty_store(tmp_path, monkeypatch) -> None:
+    """check_duplicate returns None when the store is empty (no search results)."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    result = check_duplicate(_test_embed("anything"), threshold=0.95)
+    assert result is None
+
+
+def test_check_duplicate_threshold_boundary(tmp_path, monkeypatch) -> None:
+    """check_duplicate respects the threshold parameter (distance < 1 - threshold)."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="exact copy", type="fact", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    # threshold=1.0 means distance < 0.0, which is never true — should not match
+    result = check_duplicate(_test_embed(m.content), threshold=1.0)
+    assert result is None
+
+    # threshold=0.0 means any distance < 1.0 matches — identical vector must match
+    result = check_duplicate(_test_embed(m.content), threshold=0.0)
+    assert result is not None

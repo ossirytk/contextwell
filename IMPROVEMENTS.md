@@ -41,7 +41,7 @@ Allow editing an existing memory without delete + recreate. Preserves original I
 
 ---
 
-## 4. Deduplication Check in `remember`
+## ~~4. Deduplication Check in `remember`~~ ✅
 
 Before storing a new memory, check for near-identical existing memories.
 
