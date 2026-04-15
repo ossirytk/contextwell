@@ -586,3 +586,108 @@ def test_compress_too_few_returns_empty(tmp_path, monkeypatch) -> None:
     assert compressed == []
     # Original memory should still exist
     assert any(r["id"] == m.id for r in scan(scope="global"))
+
+
+# ---------------------------------------------------------------------------
+# Item 9: remember_batch tests
+# ---------------------------------------------------------------------------
+
+def _patch_embed_batch(monkeypatch) -> None:
+    """Patch embed and embed_batch to use _test_embed (no model downloads)."""
+    monkeypatch.setattr(
+        "contextwell.embedder.embed",
+        _test_embed,
+    )
+    monkeypatch.setattr(
+        "contextwell.embedder.embed_batch",
+        lambda texts: [_test_embed(t) for t in texts],
+    )
+
+
+def test_remember_batch_stores_all(tmp_path, monkeypatch) -> None:
+    """remember_batch stores all provided memories."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    _patch_embed_batch(monkeypatch)
+
+    items = [
+        {"content": "batch item one", "type": "fact", "scope": "global"},
+        {"content": "batch item two", "type": "code", "scope": "global"},
+        {"content": "batch item three", "type": "decision", "scope": "global"},
+    ]
+    result = server_module.remember_batch(items)
+    assert "Stored 3" in result
+
+    rows = scan(scope="global")
+    contents = {r["content"] for r in rows}
+    assert {"batch item one", "batch item two", "batch item three"} <= contents
+
+
+def test_remember_batch_empty_list(tmp_path, monkeypatch) -> None:
+    """remember_batch with an empty list returns a friendly message."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    _patch_embed_batch(monkeypatch)
+
+    result = server_module.remember_batch([])
+    assert "No memories" in result
+
+
+def test_remember_batch_skips_duplicates(tmp_path, monkeypatch) -> None:
+    """remember_batch skips near-duplicates by default."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    _patch_embed_batch(monkeypatch)
+
+    # Store one memory first
+    m = Memory(content="original", type="fact", scope="global")
+    m.embedding = _test_embed("original")
+    store(m)
+
+    # Batch with the same content — should be skipped
+    result = server_module.remember_batch(
+        [{"content": "original", "scope": "global"}]
+    )
+    assert "skipped" in result
+    # Row count should still be 1
+    assert len(scan(scope="global")) == 1
+
+
+def test_remember_batch_allow_duplicate(tmp_path, monkeypatch) -> None:
+    """remember_batch stores duplicates when allow_duplicate=True."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    _patch_embed_batch(monkeypatch)
+
+    m = Memory(content="dupe candidate", type="fact", scope="global")
+    m.embedding = _test_embed("dupe candidate")
+    store(m)
+
+    result = server_module.remember_batch(
+        [{"content": "dupe candidate", "scope": "global"}],
+        allow_duplicate=True,
+    )
+    assert "Stored 1" in result
+    assert len(scan(scope="global")) == 2
+
+
+def test_remember_batch_skips_empty_content(tmp_path, monkeypatch) -> None:
+    """remember_batch ignores items with empty or missing content."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    _patch_embed_batch(monkeypatch)
+
+    items = [
+        {"content": "", "type": "fact"},
+        {"type": "fact"},  # missing content key
+        {"content": "valid item", "type": "fact", "scope": "global"},
+    ]
+    result = server_module.remember_batch(items)
+    assert "Stored 1" in result
+    rows = scan(scope="global")
+    assert any(r["content"] == "valid item" for r in rows)

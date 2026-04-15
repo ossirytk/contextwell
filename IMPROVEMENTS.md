@@ -98,7 +98,7 @@ Add `since` / `until` parameters to `list_memories`.
 
 ---
 
-## 9. Batch `remember`
+## ✅ 9. Batch `remember`
 
 `remember_batch(memories: list[dict])` — store multiple memories in one MCP call.
 

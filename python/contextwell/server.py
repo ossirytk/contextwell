@@ -281,6 +281,100 @@ def remember_file(
 
 
 @mcp.tool
+def remember_batch(
+    memories: list[dict],
+    allow_duplicate: bool = False,
+) -> str:
+    """Store multiple memories in a single call using batched embedding.
+
+    Each item in *memories* is a dict with the same fields as ``remember``:
+
+    - ``content`` (str, required): The text to remember.
+    - ``type`` (str, default "fact"): code, chat, decision, todo, or fact.
+    - ``scope`` (str, default "global"): 'project' or 'global'.
+    - ``tags`` (list[str], default []): Labels for filtering.
+    - ``source`` (str, default ""): Origin reference. Supports the
+      ``cwd:<path>`` prefix for project-scope CWD resolution.
+
+    All embeddings are computed in one batched model call, making this
+    significantly faster than calling ``remember`` N times for large sets.
+
+    Args:
+        memories: List of memory dicts (see fields above).
+        allow_duplicate: When True, skip the near-duplicate check for every
+                         item and store all memories unconditionally.
+
+    Returns:
+        A summary line with counts of stored vs skipped items plus their IDs.
+    """
+    from contextwell.embedder import embed_batch  # noqa: PLC0415, I001
+    from contextwell.store import check_duplicate, store as _store  # noqa: PLC0415
+
+    if not memories:
+        return "No memories provided."
+
+    # Parse and normalise each item before hitting the model.
+    parsed: list[dict] = []
+    for raw in memories:
+        content = str(raw.get("content", "")).strip()
+        if not content:
+            continue
+        source_raw = str(raw.get("source", ""))
+        cwd: str | None = None
+        clean_source: str | None = source_raw or None
+        if source_raw.startswith("cwd:"):
+            cwd, _, rest = source_raw[4:].partition("|")
+            clean_source = rest or None
+        scope: str = str(raw.get("scope", "global"))
+        parsed.append(
+            {
+                "content": content,
+                "type": str(raw.get("type", "fact")),
+                "scope": scope,
+                "tags": list(raw.get("tags") or []),
+                "source": clean_source,
+                "cwd": cwd,
+                "project_id": _project_id_for_scope(scope, cwd, allow_source_hint=True) or "",
+            }
+        )
+
+    if not parsed:
+        return "No valid memories (all items were empty)."
+
+    embeddings = embed_batch([item["content"] for item in parsed])
+
+    stored_ids: list[str] = []
+    skipped: list[str] = []
+
+    for item, embedding in zip(parsed, embeddings, strict=True):
+        if not allow_duplicate:
+            dup = check_duplicate(embedding)
+            if dup:
+                skipped.append(f"#{dup['id'][:8]}")
+                continue
+
+        memory = Memory(
+            content=item["content"],
+            type=item["type"],  # type: ignore[arg-type]
+            scope=item["scope"],  # type: ignore[arg-type]
+            project_id=item["project_id"] or None,
+            tags=item["tags"],
+            source=item["source"],
+        )
+        memory.embedding = embedding
+        stored_ids.append(_store(memory))
+
+    n_stored = len(stored_ids)
+    n_skipped = len(skipped)
+    parts = [f"Stored {n_stored} memor{'y' if n_stored == 1 else 'ies'}"]
+    if stored_ids:
+        parts[0] += ": " + ", ".join(f"#{mid[:8]}" for mid in stored_ids)
+    if n_skipped:
+        parts.append(f"skipped {n_skipped} near-duplicate{'s' if n_skipped > 1 else ''}: " + ", ".join(skipped))
+    return ". ".join(parts) + "."
+
+
+@mcp.tool
 def compress_memories(
     summary: str,
     type: MemoryType | Literal[""] = "",  # noqa: A002
