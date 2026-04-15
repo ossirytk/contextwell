@@ -38,6 +38,13 @@ def _test_embed(text: str) -> list[float]:
     return [value / norm for value in vector]
 
 
+def _store_mem(content: str, mtype: str = "fact", scope: str = "global") -> str:
+    """Convenience helper: create and store a Memory with a deterministic embedding."""
+    m = Memory(content=content, type=mtype, scope=scope)  # type: ignore[arg-type]
+    m.embedding = _test_embed(content)
+    return store(m)
+
+
 def test_embedding_store_integration(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("CONTEXTWELL_TEST", "1")
     monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
@@ -1025,3 +1032,78 @@ def test_dedup_chunks_in_recall(tmp_path, monkeypatch) -> None:
     # Both chunks share a group — only one should appear
     chunk_ids = [r["id"] for r in results if r.get("chunk_of") == group]
     assert len(chunk_ids) == 1
+
+
+# ---------------------------------------------------------------------------
+# Item 13: memory_stats tests
+# ---------------------------------------------------------------------------
+
+def test_memory_stats_empty(tmp_path, monkeypatch) -> None:
+    """memory_stats on an empty store returns zero totals."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    from contextwell.store import memory_stats  # noqa: PLC0415
+
+    stats = memory_stats()
+    assert stats["total"] == 0
+    assert stats["by_type"] == {}
+    assert stats["by_scope"] == {}
+    assert stats["oldest"] == ""
+    assert stats["newest"] == ""
+
+
+def test_memory_stats_counts(tmp_path, monkeypatch) -> None:
+    """memory_stats aggregates counts by type and scope correctly."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    from contextwell.store import memory_stats  # noqa: PLC0415
+
+    _store_mem("first fact", mtype="fact", scope="global")
+    _store_mem("second fact", mtype="fact", scope="global")
+    _store_mem("a decision", mtype="decision", scope="global")
+    _store_mem("project code", mtype="code", scope="project")
+
+    stats = memory_stats()
+    assert stats["total"] == 4
+    assert stats["by_type"]["fact"] == 2
+    assert stats["by_type"]["decision"] == 1
+    assert stats["by_type"]["code"] == 1
+    assert stats["by_scope"]["global"] == 3
+    assert stats["by_scope"]["project"] == 1
+
+
+def test_memory_stats_timestamps(tmp_path, monkeypatch) -> None:
+    """memory_stats oldest/newest fields are populated after storing memories."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    from contextwell.store import memory_stats  # noqa: PLC0415
+
+    _store_mem("alpha", mtype="fact", scope="global")
+    _store_mem("beta", mtype="fact", scope="global")
+
+    stats = memory_stats()
+    assert stats["oldest"] != ""
+    assert stats["newest"] != ""
+    # Lexicographic ordering holds for ISO 8601
+    assert stats["oldest"] <= stats["newest"]
+
+
+def test_memory_stats_store_bytes(tmp_path, monkeypatch) -> None:
+    """store_bytes is non-negative and positive once data has been written."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    from contextwell.store import memory_stats  # noqa: PLC0415
+
+    _store_mem("something", mtype="fact", scope="global")
+    stats = memory_stats()
+    assert stats["store_bytes"] >= 0
+
+
+def test_memory_stats_tool_returns_dict(tmp_path, monkeypatch) -> None:
+    """The MCP memory_stats tool wraps store.memory_stats correctly."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    _store_mem("tool test", mtype="todo", scope="global")
+
+    result = server_module.memory_stats()
+    assert isinstance(result, dict)
+    assert result["total"] == 1
+    assert "by_type" in result
+    assert "store_bytes" in result

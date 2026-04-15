@@ -555,6 +555,27 @@ def export_memories(
     return content
 
 
+@mcp.tool
+def memory_stats() -> dict:
+    """Return a dashboard summary of the memory store.
+
+    Provides situational awareness: how many memories are stored, how they
+    break down by type and scope, the oldest and newest timestamps, and the
+    approximate disk footprint of the store.
+
+    Returns a dict with keys:
+    - ``total``: total memory count
+    - ``by_type``: mapping of type → count
+    - ``by_scope``: mapping of scope → count
+    - ``oldest``: ISO timestamp of the oldest memory (or ``""`` if empty)
+    - ``newest``: ISO timestamp of the newest memory (or ``""`` if empty)
+    - ``store_bytes``: disk usage in bytes of the LanceDB directory
+    """
+    from contextwell.store import memory_stats as _stats  # noqa: PLC0415
+
+    return _stats()
+
+
 def run() -> None:
     mcp.run()
 

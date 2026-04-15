@@ -141,7 +141,7 @@ Automatically split content > N tokens in `remember` into overlapping chunks.
 
 ---
 
-## 13. Memory Stats Tool
+## ✅ 13. Memory Stats Tool
 
 `memory_stats()` — dashboard summary for situational awareness.
 

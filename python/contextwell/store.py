@@ -448,3 +448,43 @@ def compress(
     summary.embedding = summary_embedding
     new_id = store(summary)
     return new_id, source_ids
+
+
+def memory_stats() -> dict:
+    """Return an aggregated statistics dictionary for the memory store.
+
+    Keys returned:
+    - ``total``: total number of memories
+    - ``by_type``: count per memory type
+    - ``by_scope``: count per scope value
+    - ``oldest``: ISO timestamp of the oldest ``created_at``, or ``""``
+    - ``newest``: ISO timestamp of the newest ``created_at``, or ``""``
+    - ``store_bytes``: disk usage of the LanceDB directory in bytes
+    """
+    table = _get_table()
+    rows = table.search().select(["type", "scope", "created_at"]).limit(100_000).to_list()
+
+    by_type: dict[str, int] = {}
+    by_scope: dict[str, int] = {}
+    timestamps: list[str] = []
+
+    for row in rows:
+        t = row.get("type") or "unknown"
+        s = row.get("scope") or "unknown"
+        by_type[t] = by_type.get(t, 0) + 1
+        by_scope[s] = by_scope.get(s, 0) + 1
+        ts = row.get("created_at") or ""
+        if ts:
+            timestamps.append(ts)
+
+    timestamps.sort()
+    store_bytes = sum(f.stat().st_size for f in DB_PATH.rglob("*") if f.is_file()) if DB_PATH.exists() else 0
+
+    return {
+        "total": len(rows),
+        "by_type": by_type,
+        "by_scope": by_scope,
+        "oldest": timestamps[0] if timestamps else "",
+        "newest": timestamps[-1] if timestamps else "",
+        "store_bytes": store_bytes,
+    }
