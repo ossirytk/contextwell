@@ -49,7 +49,44 @@ uv run maturin develop
 uv run contextwell
 ```
 
-Register in your MCP client config and use naturally:
+### GitHub Copilot CLI
+
+Add to `~/.copilot/mcp-config.json`:
+
+```json
+{
+  "mcpServers": {
+    "contextwell": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/contextwell", "contextwell"],
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+Replace `/path/to/contextwell` with the absolute path to this repository. Restart Copilot CLI after saving — use `/mcp` or `/env` to verify the server is loaded.
+
+### VS Code
+
+Add to your `settings.json` or a workspace MCP config file:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "contextwell": {
+        "type": "stdio",
+        "command": "uv",
+        "args": ["run", "--directory", "/path/to/contextwell", "contextwell"]
+      }
+    }
+  }
+}
+```
+
+### Use naturally:
 
 > *"Remember that we chose LanceDB over ChromaDB for its hybrid search support"*  
 > *"What decisions have we made about the database layer?"*  
