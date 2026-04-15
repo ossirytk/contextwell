@@ -691,3 +691,114 @@ def test_remember_batch_skips_empty_content(tmp_path, monkeypatch) -> None:
     assert "Stored 1" in result
     rows = scan(scope="global")
     assert any(r["content"] == "valid item" for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# Item 10: export_memories tests
+# ---------------------------------------------------------------------------
+
+def test_export_json(tmp_path, monkeypatch) -> None:
+    """export_memories returns valid JSON with all expected fields."""
+    import json as _json  # noqa: PLC0415
+
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="export test", type="fact", scope="global", tags=["x"])
+    m.embedding = _test_embed("export test")
+    store(m)
+
+    result = server_module.export_memories(format="json")
+    data = _json.loads(result)
+    assert isinstance(data, list)
+    assert len(data) == 1
+    row = data[0]
+    assert row["content"] == "export test"
+    assert row["type"] == "fact"
+    assert "x" in row["tags"]
+    assert "embedding" not in row  # embeddings must be excluded
+
+
+def test_export_markdown(tmp_path, monkeypatch) -> None:
+    """export_memories returns well-formed Markdown."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="md export test", type="decision", scope="global")
+    m.embedding = _test_embed("md export test")
+    store(m)
+
+    result = server_module.export_memories(format="markdown")
+    assert result.startswith("# Contextwell Memory Export")
+    assert "## decision" in result
+    assert "md export test" in result
+
+
+def test_export_org(tmp_path, monkeypatch) -> None:
+    """export_memories returns well-formed Org-mode output."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="org export test", type="code", scope="global", tags=["rust"])
+    m.embedding = _test_embed("org export test")
+    store(m)
+
+    result = server_module.export_memories(format="org")
+    assert "#+TITLE: Contextwell Memory Export" in result
+    assert "* code" in result
+    assert "org export test" in result
+    assert ":rust:" in result
+
+
+def test_export_writes_file(tmp_path, monkeypatch) -> None:
+    """export_memories writes to a file and returns a summary message."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    m = Memory(content="file export test", type="fact", scope="global")
+    m.embedding = _test_embed("file export test")
+    store(m)
+
+    out_path = tmp_path / "export.json"
+    result = server_module.export_memories(format="json", path=str(out_path))
+    assert "Exported 1" in result
+    assert out_path.exists()
+    import json as _json  # noqa: PLC0415
+    data = _json.loads(out_path.read_text())
+    assert data[0]["content"] == "file export test"
+
+
+def test_export_empty_store(tmp_path, monkeypatch) -> None:
+    """export_memories returns a friendly message when no memories match."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    result = server_module.export_memories(format="json")
+    assert "No memories" in result
+
+
+def test_export_respects_filters(tmp_path, monkeypatch) -> None:
+    """export_memories only exports memories that match the given filters."""
+    import json as _json  # noqa: PLC0415
+
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    fact = Memory(content="a fact", type="fact", scope="global")
+    fact.embedding = _test_embed("a fact")
+    store(fact)
+
+    code = Memory(content="some code", type="code", scope="global")
+    code.embedding = _test_embed("some code")
+    store(code)
+
+    result = server_module.export_memories(format="json", type="code")
+    data = _json.loads(result)
+    assert len(data) == 1
+    assert data[0]["type"] == "code"

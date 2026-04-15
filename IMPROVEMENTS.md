@@ -109,7 +109,7 @@ Add `since` / `until` parameters to `list_memories`.
 
 ---
 
-## 10. Export (JSON / Markdown)
+## ✅ 10. Export (JSON / Markdown)
 
 `export_memories(format, scope, path)` — portable snapshot of the memory store.
 

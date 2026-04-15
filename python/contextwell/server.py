@@ -433,6 +433,78 @@ def compress_memories(
     )
 
 
+@mcp.tool
+def export_memories(
+    format: Literal["json", "markdown", "org"] = "json",  # noqa: A002
+    scope: MemoryScope | Literal[""] = "",
+    type: MemoryType | Literal[""] = "",  # noqa: A002
+    tags: list[str] | None = None,
+    since: str = "",
+    until: str = "",
+    path: str = "",
+    limit: int = 1000,
+) -> str:
+    """Export memories as JSON, Markdown, or Org-mode.
+
+    Scans the store with the given filters, then serialises the results in
+    the requested format.  When *path* is provided the output is written to
+    that file and a summary is returned; otherwise the full text is returned
+    directly (suitable for small exports or piping into another tool).
+
+    Args:
+        format: Output format — 'json' (full fidelity, re-importable via
+                remember_batch), 'markdown' (human-readable, grouped by
+                type), or 'org' (Org-mode with PROPERTIES drawers).
+        scope: Filter by scope. Empty means all.
+               For 'project', git root is auto-detected from server CWD.
+        type: Filter by memory type. Empty means all.
+        tags: Only export memories that have at least one of these tags.
+        since: ISO 8601 lower bound for created_at (inclusive).
+        until: ISO 8601 upper bound for created_at (inclusive).
+        path: File path to write the export to. When empty, the content is
+              returned as a string.
+        limit: Maximum number of memories to export (default 1000).
+    """
+    from contextwell.export import to_json, to_markdown, to_org  # noqa: PLC0415
+    from contextwell.store import scan  # noqa: PLC0415
+
+    project_id = _project_id_for_scope(scope) or ""
+    scope_label = f"project:{project_id[:8]}" if project_id else (scope or "all")
+
+    rows = scan(
+        scope=scope,
+        memory_type=type,
+        project_id=project_id,
+        tags=tags,
+        limit=limit,
+        since=since,
+        until=until,
+    )
+
+    if not rows:
+        return "No memories matched the given filters — nothing to export."
+
+    if format == "markdown":
+        content = to_markdown(rows, scope_label=scope_label)
+    elif format == "org":
+        content = to_org(rows, scope_label=scope_label)
+    else:
+        content = to_json(rows)
+
+    if path:
+        from pathlib import Path  # noqa: PLC0415
+
+        out = Path(path).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(content, encoding="utf-8")
+        return (
+            f"Exported {len(rows)} memor{'y' if len(rows) == 1 else 'ies'} "
+            f"as {format} to {out}."
+        )
+
+    return content
+
+
 def run() -> None:
     mcp.run()
 
