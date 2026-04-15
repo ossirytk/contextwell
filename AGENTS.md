@@ -43,8 +43,12 @@ The following tools are installed locally and available for use in terminal work
 | `hyperfine` | Command-line benchmarking with statistical output |
 | `pre-commit` | Run and manage repository pre-commit hooks |
 | `http` / `https` (HTTPie) | Human-friendly HTTP API client |
-| `just` | Project task runner via `justfile` recipes |
 | `difft` (difftastic) | Syntax-aware structural diffing |
+| `bat` | Cat clone with syntax highlighting and Git integration |
+| `delta` | Syntax-highlighting pager for git diffs (git-delta) |
+| `sd` | Intuitive find-and-replace CLI (sed alternative) |
+| `tldr` | Simplified, community-driven man pages (tealdeer) |
+| `grex` | Generate regular expressions from example strings |
 
 Prefer these tools over PowerShell built-ins where applicable (e.g., use `rg` instead of `Select-String`, use `fd` instead of `Get-ChildItem` for file discovery).
 
@@ -55,8 +59,7 @@ Prefer these tools over PowerShell built-ins where applicable (e.g., use `rg` in
 - JSON config inspection: `jq`
 - YAML/TOML inspection: `yq`
 - HTTP/API smoke checks: `http` / `https` (HTTPie)
-- Task orchestration: `just` recipes when a `justfile` exists
-- Diff/review: `difft` for syntax-aware diffs, `diff` for plain text diffs
+- Diff/review: `difft` for syntax-aware diffs, `diff` for plain text diffs, `delta` for git diffs
 - Performance comparisons: `hyperfine` for repeatable timing
 
 ### Avoid in autonomous runs

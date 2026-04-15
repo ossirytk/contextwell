@@ -15,9 +15,26 @@ mcp = FastMCP(
         "Use `remember` to store facts, decisions, code snippets, or notes. "
         "Use `recall` to search memory by meaning, not just keywords. "
         "Use `forget` to delete a memory by ID. "
-        "Use `list_memories` to browse stored memories with filters."
+        "Use `list_memories` to browse stored memories with filters. "
+        "For project-scoped memories, set scope='project' and contextwell will "
+        "auto-detect the current git repository as the project context."
     ),
 )
+
+
+def _project_id_for_scope(scope: str, cwd: str | None = None, *, allow_source_hint: bool = False) -> str | None:
+    """Resolve project_id for project scope, or None for non-project scopes."""
+    if scope != "project":
+        return None
+    from contextwell.project import detect_project_id  # noqa: PLC0415
+
+    project_id = detect_project_id(cwd)
+    if not project_id:
+        msg = "Unable to detect project context for scope='project'. Run from a git repository."
+        if allow_source_hint:
+            msg += " You can also pass source='cwd:<path>'."
+        raise ValueError(msg)
+    return project_id
 
 
 @mcp.tool
@@ -33,23 +50,35 @@ def remember(
     Args:
         content: The text to remember.
         type: Kind of memory — code, chat, decision, todo, or fact.
-        scope: 'project' (tied to current project) or 'global'.
+        scope: 'project' (tied to current git repo) or 'global'.
         tags: Optional labels for filtering later.
         source: Optional origin reference (file path, URL, conversation turn).
+                For project-scoped memories, prefix with 'cwd:<path>' to set
+                the working directory used for git root detection, e.g.
+                'cwd:D:/myproject'. Otherwise the server CWD is used.
     """
     from contextwell.embedder import embed  # noqa: PLC0415
     from contextwell.store import store  # noqa: PLC0415
 
+    cwd: str | None = None
+    clean_source: str | None = source or None
+    if source and source.startswith("cwd:"):
+        cwd, _, rest = source[4:].partition("|")
+        clean_source = rest or None
+
+    project_id = _project_id_for_scope(scope, cwd, allow_source_hint=True)
     memory = Memory(
         content=content,
         type=type,
         scope=scope,
+        project_id=project_id,
         tags=tags or [],
-        source=source or None,
+        source=clean_source,
     )
     memory.embedding = embed(content)
     memory_id = store(memory)
-    return f"Remembered [{type}] #{memory_id[:8]}: {content[:80]}"
+    scope_label = f"project:{project_id[:8]}" if project_id else scope
+    return f"Remembered [{type}|{scope_label}] #{memory_id[:8]}: {content[:80]}"
 
 
 @mcp.tool
@@ -64,6 +93,7 @@ def recall(
     Args:
         query: Natural language search query.
         scope: Filter by scope ('project' or 'global'). Empty means all.
+               For 'project' scope, git root is auto-detected from server CWD.
         type: Filter by memory type. Empty means all types.
         k: Maximum number of results to return.
     """
@@ -71,10 +101,8 @@ def recall(
     from contextwell.store import recall as _recall  # noqa: PLC0415
 
     embedding = embed(query)
-    results = _recall(embedding, scope=scope, memory_type=type, k=k)
-    for r in results:
-        r.pop("embedding", None)
-    return results
+    project_id = _project_id_for_scope(scope) or ""
+    return _recall(embedding, scope=scope, memory_type=type, project_id=project_id or "", k=k)
 
 
 @mcp.tool
@@ -82,7 +110,7 @@ def forget(memory_id: str) -> str:
     """Delete a memory by its ID.
 
     Args:
-        memory_id: Full or partial ID of the memory to delete.
+        memory_id: Full or partial (first 8 chars) ID of the memory to delete.
     """
     from contextwell.store import forget as _forget  # noqa: PLC0415
 
@@ -102,26 +130,14 @@ def list_memories(
 
     Args:
         scope: Filter by scope. Empty means all.
+               For 'project' scope, git root is auto-detected from server CWD.
         type: Filter by memory type. Empty means all.
         limit: Maximum number of results.
     """
-    from contextwell.store import _get_table  # noqa: PLC0415
+    from contextwell.store import scan  # noqa: PLC0415
 
-    table = _get_table()
-    clauses = []
-    if scope:
-        clauses.append(f"scope = '{scope}'")
-    if type:
-        clauses.append(f"type = '{type}'")
-
-    query = table.search().limit(limit)
-    if clauses:
-        query = query.where(" AND ".join(clauses))
-
-    rows = query.to_list()
-    for r in rows:
-        r.pop("embedding", None)
-    return rows
+    project_id = _project_id_for_scope(scope) or ""
+    return scan(scope=scope, memory_type=type, project_id=project_id or "", limit=limit)
 
 
 def run() -> None:

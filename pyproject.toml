@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=3.2.0",
+    "lancedb==0.30.0",
+    "sentence-transformers>=5.3.0",
 ]
 
 [project.scripts]
@@ -89,7 +91,7 @@ unfixable = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "PLR2004", "ANN"]
+"tests/**" = ["S101", "PLR2004", "ANN", "T201"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
