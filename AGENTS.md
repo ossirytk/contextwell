@@ -25,52 +25,6 @@ All terminal commands should be reproducible from the supported shell/editor com
 
 ---
 
-## 0.1 Available CLI Tools
-
-The following tools are installed locally and available for use in terminal workflows and agent tasks:
-
-| Tool | Purpose |
-|------|---------|
-| `diffutils` | File comparison (`diff`, `cmp`, `diff3`, `sdiff`) |
-| `fd` | Fast, user-friendly alternative to `find` for file search |
-| `fzf` | General-purpose fuzzy finder for interactive filtering |
-| `ripgrep` (`rg`) | Fast regex search across files; prefer over `grep`/`Select-String` |
-| `zip` | Archive creation and extraction |
-| `tokei` | Count lines of code by language |
-| `ast-grep` (`sg`) | Structural code search and rewriting using AST patterns |
-| `jq` | JSON query and transformation CLI |
-| `yq` | YAML/JSON/TOML query and transformation CLI |
-| `hyperfine` | Command-line benchmarking with statistical output |
-| `pre-commit` | Run and manage repository pre-commit hooks |
-| `http` / `https` (HTTPie) | Human-friendly HTTP API client |
-| `difft` (difftastic) | Syntax-aware structural diffing |
-| `bat` | Cat clone with syntax highlighting and Git integration |
-| `delta` | Syntax-highlighting pager for git diffs (git-delta) |
-| `sd` | Intuitive find-and-replace CLI (sed alternative) |
-| `tldr` | Simplified, community-driven man pages (tealdeer) |
-| `grex` | Generate regular expressions from example strings |
-
-Prefer these tools over PowerShell built-ins where applicable (e.g., use `rg` instead of `Select-String`, use `fd` instead of `Get-ChildItem` for file discovery).
-
-### Preferred command order
-
-- Content search: `rg` first, then `ast-grep` for structural/language-aware matching
-- File discovery: `fd` first, then `rg --files` as a fallback
-- JSON config inspection: `jq`
-- YAML/TOML inspection: `yq`
-- HTTP/API smoke checks: `http` / `https` (HTTPie)
-- Diff/review: `difft` for syntax-aware diffs, `diff` for plain text diffs, `delta` for git diffs
-- Performance comparisons: `hyperfine` for repeatable timing
-
-### Avoid in autonomous runs
-
-- Avoid interactive-only flows (for example `fzf` prompts) unless the user explicitly asks for interactive selection
-- Avoid destructive git/file operations unless the user explicitly approves them
-- Avoid long-running watch commands by default; use one-shot checks first, then switch to watch mode only when requested
-- Avoid invoking `pre-commit run --all-files` on very large repos when a targeted path or hook is enough for the task
-
----
-
 ## 1. Authoritative Tools & Source of Truth
 
 ### Python
