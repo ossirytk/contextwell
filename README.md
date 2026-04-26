@@ -197,10 +197,13 @@ Memory is stored at `~/.contextwell/memories/`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CONTEXTWELL_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Sentence-transformers model name |
+| `CONTEXTWELL_EMBED_PROVIDER` | `sentence-transformers` | Embedding backend: `sentence-transformers` or `openai` |
+| `CONTEXTWELL_EMBED_MODEL` | `BAAI/bge-small-en-v1.5` | Model name; defaults to `text-embedding-3-small` when provider is `openai` |
+| `CONTEXTWELL_EMBED_DIM` | `384` | Embedding vector dimension — must match the model; change if you switch models |
 | `CONTEXTWELL_STORE_DIR` | `~/.contextwell/memories` | Path to the LanceDB vector store |
 | `CONTEXTWELL_CHUNKING` | _(unset)_ | Set to `1` to enable automatic content chunking on `remember` |
 | `CONTEXTWELL_CHUNK_SIZE` | `400` | Word count threshold per chunk (requires `CONTEXTWELL_CHUNKING=1`) |
+| `CONTEXTWELL_HYBRID` | _(unset)_ | Set to `1` to enable BM25 + vector hybrid search (requires the `hybrid` extra) |
 
 ---
 
@@ -225,6 +228,17 @@ export CONTEXTWELL_EMBED_MODEL=all-MiniLM-L6-v2
 ```bash
 uv tool install "contextwell[hybrid] @ git+https://github.com/ossirytk/contextwell"
 ```
+
+Then enable hybrid retrieval at runtime by setting the environment variable:
+
+```bash
+# PowerShell
+$env:CONTEXTWELL_HYBRID="1"
+# bash/fish
+export CONTEXTWELL_HYBRID=1
+```
+
+Or pass it directly in your MCP client configuration via the `env` block (see [Client Configuration](#client-configuration)).
 
 ---
 

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
     from contextwell.schema import Memory
 
-DB_PATH = Path.home() / ".contextwell" / "memories"
+DB_PATH = Path(os.getenv("CONTEXTWELL_STORE_DIR", str(Path.home() / ".contextwell" / "memories")))
 _LOG = logging.getLogger(__name__)
 
 
