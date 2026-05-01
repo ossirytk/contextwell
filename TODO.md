@@ -2,6 +2,8 @@
 
 ## Fixes
 
+- **PyO3 version cap (Python 3.14+)** — `pyo3 = "0.23"` in Cargo.toml caps support at Python 3.13. On systems running Python 3.14+, `cargo check` fails. Bump to `pyo3 = "0.28"` (current latest) and verify lib.rs API compatibility (key change: return `Bound<'py, PyDict>` instead of `PyObject` for dict-returning functions).
+
 - **`recall` missing date filters** — `list_memories` supports `since`/`until` but semantic search (`recall`) doesn't. Add optional date-range params so you can scope recall to recent memories.
 - **Embedding model migration path** — upgrading from the old default model (`all-MiniLM-L6-v2`) wipes the store with no recovery. Document a re-embed migration script or add a `contextwell migrate` CLI command that re-embeds all records with the new model.
 - **`memory_stats` doesn't flag stale memories** — add a `stale_days` threshold that reports memories untouched (not recalled, not updated) for longer than N days, so users can prune without exporting everything.
