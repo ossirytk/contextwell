@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "contextwell": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/contextwell", "contextwell"]
+    }
+  }
+}
