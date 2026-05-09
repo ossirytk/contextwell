@@ -93,7 +93,7 @@ def _parse_org(text: str, *, default_tags: list[str], default_type: str, source:
     headline_matches = list(_ORG_HEADLINE_RE.finditer(text))
     if not headline_matches:
         # No headlines — treat as plain text.
-        return _parse_txt(text, default_tags=default_tags, default_type="fact", source=source)
+        return _parse_txt(text, default_tags=default_tags, default_type=default_type, source=source)
 
     chunks: list[FileChunk] = []
 
@@ -210,7 +210,7 @@ def _parse_source(text: str, *, default_tags: list[str], source: str) -> list[Fi
     Falls back to character-size chunking when no definition boundaries are found.
     """
     boundaries = _find_definition_boundaries(text)
-    if len(boundaries) < 2:  # noqa: PLR2004
+    if not boundaries:
         # Fall back to plain character chunking.
         raw = _paragraph_chunks(text, chunk_size=_CHUNK_SIZE, overlap=_CHUNK_OVERLAP)
         if not raw:

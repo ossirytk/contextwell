@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastmcp import FastMCP
@@ -22,16 +23,30 @@ mcp = FastMCP(
 )
 
 
+def _normalize_expires_at(expires_at: str) -> str:
+    """Return *expires_at* normalized to a timezone-aware UTC ISO 8601 string."""
+    value = expires_at.strip()
+    if not value:
+        return ""
+    if value.endswith("Z"):
+        value = f"{value[:-1]}+00:00"
+    dt = datetime.fromisoformat(value)
+    dt = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+    return dt.isoformat()
+
+
 def _validate_expires_at(expires_at: str) -> str | None:
     """Return an error message if *expires_at* is not a valid ISO 8601 datetime, else None."""
     if not expires_at:
         return None
-    from datetime import datetime  # noqa: PLC0415
-
     try:
-        datetime.fromisoformat(expires_at)
+        _normalize_expires_at(expires_at)
     except ValueError:
-        return f"expires_at must be a valid ISO 8601 datetime (e.g. '2026-12-31T23:59:59'), got: {expires_at!r}"
+        return (
+            "expires_at must be a valid ISO 8601 datetime "
+            "(e.g. '2026-12-31T23:59:59Z' or '2026-12-31T23:59:59+00:00'), "
+            f"got: {expires_at!r}"
+        )
     else:
         return None
 
@@ -109,6 +124,7 @@ def remember(
     err = _validate_expires_at(expires_at)
     if err:
         return f"Error: {err}"
+    normalized_expires_at = _normalize_expires_at(expires_at) if expires_at else ""
 
     cwd: str | None = None
     clean_source: str | None = source or None
@@ -148,7 +164,7 @@ def remember(
                     tags=tags or [],
                     source=clean_source,
                     chunk_of=group_id,
-                    expires_at=expires_at or "",
+                    expires_at=normalized_expires_at,
                 )
                 m.embedding = emb
                 ids.append(store(m))
@@ -178,7 +194,7 @@ def remember(
         project_id=project_id,
         tags=tags or [],
         source=clean_source,
-        expires_at=expires_at or "",
+        expires_at=normalized_expires_at,
     )
     memory.embedding = embedding
     memory_id = store(memory)
@@ -454,7 +470,7 @@ def remember_batch(
 
     # Parse and normalise each item before hitting the model.
     parsed: list[dict] = []
-    for raw in memories:
+    for index, raw in enumerate(memories, start=1):
         content = str(raw.get("content", "")).strip()
         if not content:
             continue
@@ -469,7 +485,7 @@ def remember_batch(
         expires_at_raw: str = str(raw.get("expires_at", ""))
         err = _validate_expires_at(expires_at_raw)
         if err:
-            return f"Error in item {len(parsed)}: {err}"
+            return f"Error in item {index}: {err}"
         parsed.append(
             {
                 "content": content,
@@ -478,7 +494,7 @@ def remember_batch(
                 "tags": list(raw.get("tags") or []),
                 "source": clean_source,
                 "cwd": cwd,
-                "expires_at": expires_at_raw,
+                "expires_at": _normalize_expires_at(expires_at_raw) if expires_at_raw else "",
                 "project_id": _project_id_for_scope(scope, cwd, allow_source_hint=True, scope_path=scope_path_raw)
                 or "",
             }
