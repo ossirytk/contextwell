@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 /// A lightweight memory record passed between Rust and Python.
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct MemoryRecord {
     #[pyo3(get, set)]

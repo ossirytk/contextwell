@@ -463,6 +463,7 @@ def test_dimension_mismatch_raises(tmp_path, monkeypatch) -> None:
 # Date range filtering tests
 # ---------------------------------------------------------------------------
 
+
 def test_since_filter_excludes_older(tmp_path, monkeypatch) -> None:
     """scan with since= excludes memories with older created_at."""
     from datetime import UTC, datetime  # noqa: PLC0415
@@ -544,14 +545,15 @@ def test_since_until_range(tmp_path, monkeypatch) -> None:
 
     results = scan(since="2025-01-01", until="2025-05-31")
     ids = {r["id"] for r in results}
-    assert memories[1].id in ids       # 2025-02-15 is in range
-    assert memories[0].id not in ids   # 2024-12-31 is before since
-    assert memories[2].id not in ids   # 2025-06-30 is after until
+    assert memories[1].id in ids  # 2025-02-15 is in range
+    assert memories[0].id not in ids  # 2024-12-31 is before since
+    assert memories[2].id not in ids  # 2025-06-30 is after until
 
 
 # ---------------------------------------------------------------------------
 # find_cluster / compress tests
 # ---------------------------------------------------------------------------
+
 
 def test_find_cluster_returns_similar(tmp_path, monkeypatch) -> None:
     """find_cluster returns memories whose cosine similarity meets the threshold."""
@@ -654,6 +656,7 @@ def test_compress_too_few_returns_empty(tmp_path, monkeypatch) -> None:
 # Item 9: remember_batch tests
 # ---------------------------------------------------------------------------
 
+
 def _patch_embed_batch(monkeypatch) -> None:
     """Patch embed and embed_batch to use _test_embed (no model downloads)."""
     monkeypatch.setattr(
@@ -710,9 +713,7 @@ def test_remember_batch_skips_duplicates(tmp_path, monkeypatch) -> None:
     store(m)
 
     # Batch with the same content — should be skipped
-    result = server_module.remember_batch(
-        [{"content": "original", "scope": "global"}]
-    )
+    result = server_module.remember_batch([{"content": "original", "scope": "global"}])
     assert "skipped" in result
     # Row count should still be 1
     assert len(scan(scope="global")) == 1
@@ -758,6 +759,7 @@ def test_remember_batch_skips_empty_content(tmp_path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # Item 10: export_memories tests
 # ---------------------------------------------------------------------------
+
 
 def test_export_json(tmp_path, monkeypatch) -> None:
     """export_memories returns valid JSON with all expected fields."""
@@ -830,6 +832,7 @@ def test_export_writes_file(tmp_path, monkeypatch) -> None:
     assert "Exported 1" in result
     assert out_path.exists()
     import json as _json  # noqa: PLC0415
+
     data = _json.loads(out_path.read_text())
     assert data[0]["content"] == "file export test"
 
@@ -869,6 +872,7 @@ def test_export_respects_filters(tmp_path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # Item 11: cross-encoder reranking tests
 # ---------------------------------------------------------------------------
+
 
 class _MockCrossEncoder:
     """Deterministic mock: scores by reverse position in the input list."""
@@ -1019,6 +1023,7 @@ def test_recall_rerank_false_unchanged(tmp_path, monkeypatch) -> None:
 # Item 12: chunking tests
 # ---------------------------------------------------------------------------
 
+
 def test_chunk_text_short_passthrough() -> None:
     """chunk_text returns a single-element list for short content."""
     from contextwell.chunker import chunk_text  # noqa: PLC0415
@@ -1154,6 +1159,7 @@ def test_dedup_chunks_in_recall(tmp_path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # Item 13: memory_stats tests
 # ---------------------------------------------------------------------------
+
 
 def test_memory_stats_empty(tmp_path, monkeypatch) -> None:
     """memory_stats on an empty store returns zero totals."""
