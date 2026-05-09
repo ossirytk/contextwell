@@ -22,6 +22,20 @@ mcp = FastMCP(
 )
 
 
+def _validate_expires_at(expires_at: str) -> str | None:
+    """Return an error message if *expires_at* is not a valid ISO 8601 datetime, else None."""
+    if not expires_at:
+        return None
+    from datetime import datetime  # noqa: PLC0415
+
+    try:
+        datetime.fromisoformat(expires_at)
+    except ValueError:
+        return f"expires_at must be a valid ISO 8601 datetime (e.g. '2026-12-31T23:59:59'), got: {expires_at!r}"
+    else:
+        return None
+
+
 def _project_id_for_scope(
     scope: str,
     cwd: str | None = None,
@@ -91,6 +105,10 @@ def remember(
     from contextwell.chunker import chunk_text, chunking_enabled  # noqa: PLC0415
     from contextwell.embedder import embed, embed_batch  # noqa: PLC0415
     from contextwell.store import check_duplicate, store  # noqa: PLC0415
+
+    err = _validate_expires_at(expires_at)
+    if err:
+        return f"Error: {err}"
 
     cwd: str | None = None
     clean_source: str | None = source or None
@@ -448,6 +466,10 @@ def remember_batch(
             clean_source = rest or None
         scope: str = str(raw.get("scope", "global"))
         scope_path_raw: str = str(raw.get("scope_path", ""))
+        expires_at_raw: str = str(raw.get("expires_at", ""))
+        err = _validate_expires_at(expires_at_raw)
+        if err:
+            return f"Error in item {len(parsed)}: {err}"
         parsed.append(
             {
                 "content": content,
@@ -456,7 +478,7 @@ def remember_batch(
                 "tags": list(raw.get("tags") or []),
                 "source": clean_source,
                 "cwd": cwd,
-                "expires_at": str(raw.get("expires_at", "")),
+                "expires_at": expires_at_raw,
                 "project_id": _project_id_for_scope(scope, cwd, allow_source_hint=True, scope_path=scope_path_raw)
                 or "",
             }

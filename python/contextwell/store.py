@@ -253,7 +253,7 @@ def _recall_hybrid(
     for mid, rrf_score in fused[:k]:
         if mid not in id_to_row:
             continue
-        row = id_to_row[mid]
+        row = dict(id_to_row[mid])  # copy — do not mutate the shared cache
         if include_score:
             row["score"] = round(float(rrf_score), 6)
         results.append(row)
@@ -368,11 +368,13 @@ def scan(
     )
     clauses.append(_exclude_expired_clause())
 
-    query = table.search().limit(limit)
+    query = table.search()
     if clauses:
         query = query.where(" AND ".join(clauses))
 
-    return [_clean(row) for row in query.to_list()]
+    # Sort by created_at DESC, id ASC for deterministic ordering, then apply limit in Python.
+    rows = sorted(query.to_list(), key=lambda r: (r.get("created_at", ""), r.get("id", "")), reverse=True)
+    return [_clean(row) for row in rows[:limit]]
 
 
 def forget(memory_id: str) -> bool:
@@ -622,7 +624,13 @@ def reembed_all(batch_size: int = 64) -> dict:
     Use this after changing ``CONTEXTWELL_EMBED_MODEL`` to migrate all
     existing memories to the new model.
 
-    Returns a dict with ``total`` (memories found) and ``reembedded`` (updated count).
+    **Note:** The total row count is captured once at the start of the
+    operation. Memories added by other writers during execution will not be
+    re-embedded in this run. To ensure complete coverage, avoid writing new
+    memories while ``reembed_all`` is running and re-run if needed.
+
+    Returns a dict with ``total`` (memories found at start) and
+    ``reembedded`` (updated count).
     """
     from contextwell.embedder import embed_batch  # noqa: PLC0415
 
