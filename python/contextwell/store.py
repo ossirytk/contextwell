@@ -34,7 +34,7 @@ def _escape_literal(value: str) -> str:
 def _ensure_scalar_indexes(table: Table) -> None:
     """Create missing scalar indexes used by metadata filters."""
     indexed_columns = {column for index in table.list_indices() for column in index.columns}
-    for column in ("scope", "type", "project_id", "created_at"):
+    for column in ("scope", "type", "project_id", "created_at", "expires_at"):
         if column not in indexed_columns:
             table.create_scalar_index(column)
 
@@ -98,6 +98,12 @@ def _ensure_parent_ids_column(table: Table) -> None:
         table.add_columns(pa.schema([pa.field("parent_ids", pa.list_(pa.string()))]))
 
 
+def _ensure_expires_at_column(table: Table) -> None:
+    """Add the expires_at column to existing tables that pre-date this field."""
+    if "expires_at" not in {f.name for f in table.schema}:
+        table.add_columns({"expires_at": "''"})
+
+
 def _ensure_chunk_of_column(table: Table) -> None:
     """Add the chunk_of column to existing tables that pre-date this field."""
     if "chunk_of" not in {f.name for f in table.schema}:
@@ -124,6 +130,7 @@ def _get_table():  # noqa: ANN202
                 pa.field("updated_at", pa.string()),
                 pa.field("parent_ids", pa.list_(pa.string())),
                 pa.field("chunk_of", pa.string()),
+                pa.field("expires_at", pa.string()),
                 pa.field("embedding", pa.list_(pa.float32(), dim)),
             ]
         )
@@ -131,10 +138,11 @@ def _get_table():  # noqa: ANN202
         _ensure_scalar_indexes(tbl)
         return tbl
     tbl = db.open_table("memories")
-    _ensure_scalar_indexes(tbl)
     _ensure_updated_at_column(tbl)
     _ensure_parent_ids_column(tbl)
     _ensure_chunk_of_column(tbl)
+    _ensure_expires_at_column(tbl)
+    _ensure_scalar_indexes(tbl)
     _check_embedding_dim(tbl, dim)
     return tbl
 
@@ -153,14 +161,21 @@ def _check_embedding_dim(table: Table, expected: int) -> None:
         raise ValueError(msg)
 
 
-def _clean(row: dict) -> dict:
-    """Strip LanceDB internal columns from a result row."""
-    row.pop("_distance", None)
+def _clean(row: dict, include_score: bool = False) -> dict:
+    """Strip LanceDB internal columns from a result row.
+
+    When *include_score* is True, the ``_distance`` value is converted to a
+    cosine similarity score in the 0-1 range and kept as ``"score"``.
+    """
+    distance = row.pop("_distance", None)
     row.pop("embedding", None)
     if row.get("tags") is None:
         row["tags"] = []
     if row.get("parent_ids") is None:
         row["parent_ids"] = []
+    if include_score and distance is not None:
+        clamped_distance = max(0.0, min(1.0, float(distance)))
+        row["score"] = round(1.0 - clamped_distance, 4)
     return row
 
 
@@ -181,11 +196,18 @@ def store(memory: Memory) -> str:
                 "updated_at": "",
                 "parent_ids": memory.parent_ids,
                 "chunk_of": memory.chunk_of,
+                "expires_at": memory.expires_at or "",
                 "embedding": memory.embedding,
             }
         ]
     )
     return memory.id
+
+
+def _exclude_expired_clause() -> str:
+    """Return a LanceDB filter clause that excludes memories past their expiry."""
+    now = _escape_literal(datetime.now(UTC).isoformat())
+    return f"(expires_at = '' OR expires_at > '{now}')"
 
 
 def _recall_hybrid(
@@ -194,16 +216,17 @@ def _recall_hybrid(
     query: str,
     clauses: list[str],
     k: int,
+    include_score: bool = False,
 ) -> list[dict]:
     """Vector + BM25 search fused with RRF. Falls back to pure vector on ImportError."""
     try:
         from contextwell._core import search_candidates  # noqa: PLC0415
         from contextwell.bm25 import bm25_search  # noqa: PLC0415
     except ImportError:
-        q = table.search(embedding).limit(k)
+        q = table.search(embedding).metric("cosine").limit(k)
         if clauses:
             q = q.where(" AND ".join(clauses))
-        return [_clean(row) for row in q.to_list()]
+        return [_clean(row, include_score=include_score) for row in q.to_list()]
 
     corpus_q = table.search()
     if clauses:
@@ -215,7 +238,7 @@ def _recall_hybrid(
 
     candidate_k = min(k * 3, len(corpus_rows))
 
-    dense_q = table.search(embedding).limit(candidate_k)
+    dense_q = table.search(embedding).metric("cosine").limit(candidate_k)
     if clauses:
         dense_q = dense_q.where(" AND ".join(clauses))
     dense_ids = [row["id"] for row in dense_q.to_list()]
@@ -227,7 +250,15 @@ def _recall_hybrid(
         return [id_to_row[mid] for mid in dense_ids if mid in id_to_row][:k]
 
     fused = search_candidates(dense_ids, sparse_ids)
-    return [id_to_row[mid] for mid, _ in fused[:k] if mid in id_to_row]
+    results = []
+    for mid, rrf_score in fused[:k]:
+        if mid not in id_to_row:
+            continue
+        row = dict(id_to_row[mid])  # copy — do not mutate the shared cache
+        if include_score:
+            row["score"] = round(float(rrf_score), 6)
+        results.append(row)
+    return results
 
 
 def _dedup_chunks(rows: list[dict], k: int) -> list[dict]:
@@ -252,7 +283,7 @@ def _dedup_chunks(rows: list[dict], k: int) -> list[dict]:
     return out
 
 
-def recall(
+def recall(  # noqa: PLR0913
     embedding: list[float],
     query: str = "",
     scope: str = "",
@@ -261,6 +292,9 @@ def recall(
     tags: list[str] | None = None,
     k: int = 10,
     rerank: bool = False,
+    since: str = "",
+    until: str = "",
+    include_score: bool = False,
 ) -> list[dict]:
     """Vector search with optional metadata filters. Returns top-k results.
 
@@ -274,21 +308,29 @@ def recall(
 
     Chunks sharing the same ``chunk_of`` group ID are deduplicated: only the
     highest-scoring chunk per group is kept.
+
+    Expired memories (``expires_at`` ≤ now) are silently excluded.
+
+    When *include_score* is ``True``, each result includes a ``"score"`` key
+    (cosine similarity for dense search; RRF score for hybrid search).
     """
     table = _get_table()
-    clauses = _where_clauses(scope=scope, memory_type=memory_type, project_id=project_id, tags=tags)
+    clauses = _where_clauses(
+        scope=scope, memory_type=memory_type, project_id=project_id, tags=tags, since=since, until=until
+    )
+    clauses.append(_exclude_expired_clause())
 
     # Expand candidate pool when chunking may produce duplicate groups or reranking.
     has_chunks = os.getenv("CONTEXTWELL_CHUNKING") == "1"
     candidate_k = max(k * 3, 20) if (rerank and query) or has_chunks else k
 
     if os.getenv("CONTEXTWELL_HYBRID") == "1" and query:
-        results = _recall_hybrid(table, embedding, query, clauses, candidate_k)
+        results = _recall_hybrid(table, embedding, query, clauses, candidate_k, include_score=include_score)
     else:
-        q = table.search(embedding).limit(candidate_k)
+        q = table.search(embedding).metric("cosine").limit(candidate_k)
         if clauses:
             q = q.where(" AND ".join(clauses))
-        results = [_clean(row) for row in q.to_list()]
+        results = [_clean(row, include_score=include_score) for row in q.to_list()]
 
     if rerank and query:
         from contextwell.reranker import rerank as _rerank  # noqa: PLC0415
@@ -311,7 +353,13 @@ def scan(
     since: str = "",
     until: str = "",
 ) -> list[dict]:
-    """Full-table scan with optional metadata filters. No vector required."""
+    """Full-table scan with optional metadata filters. No vector required.
+
+    Expired memories (``expires_at`` ≤ now) are silently excluded.
+    """
+    if limit <= 0:
+        return []
+
     table = _get_table()
 
     clauses = _where_clauses(
@@ -322,12 +370,37 @@ def scan(
         since=since,
         until=until,
     )
+    clauses.append(_exclude_expired_clause())
 
-    query = table.search().limit(limit)
+    query = table.search()
     if clauses:
         query = query.where(" AND ".join(clauses))
 
-    return [_clean(row) for row in query.to_list()]
+    page_size = max(200, limit * 4)
+    offset = 0
+    candidates: list[dict] = []
+
+    while True:
+        page = query.limit(page_size).offset(offset).to_list()
+        if not page:
+            break
+        candidates.extend(page)
+        offset += len(page)
+
+        # Stable two-pass sort: created_at DESC, id ASC.
+        candidates.sort(key=lambda row: str(row.get("id", "")))
+        candidates.sort(key=lambda row: str(row.get("created_at", "")), reverse=True)
+
+        if len(candidates) > limit:
+            cutoff_created_at = str(candidates[limit - 1].get("created_at", ""))
+            candidates = [row for row in candidates if str(row.get("created_at", "")) >= cutoff_created_at]
+
+        if len(page) < page_size:
+            break
+
+    candidates.sort(key=lambda row: str(row.get("id", "")))
+    candidates.sort(key=lambda row: str(row.get("created_at", "")), reverse=True)
+    return [_clean(row) for row in candidates[:limit]]
 
 
 def forget(memory_id: str) -> bool:
@@ -488,7 +561,7 @@ def compress(
     return new_id, source_ids
 
 
-def memory_stats() -> dict:
+def memory_stats(stale_days: int = 0) -> dict:
     """Return an aggregated statistics dictionary for the memory store.
 
     Keys returned:
@@ -498,18 +571,35 @@ def memory_stats() -> dict:
     - ``oldest``: ISO timestamp of the oldest ``created_at``, or ``""``
     - ``newest``: ISO timestamp of the newest ``created_at``, or ``""``
     - ``store_bytes``: disk usage of the LanceDB directory in bytes
+    - ``stale_count``: (only when *stale_days* > 0) number of memories that
+      have never been updated and whose ``created_at`` is older than
+      *stale_days* days.
     """
     table = _get_table()
     total = table.count_rows()
 
+    stale_threshold = ""
+    if stale_days > 0:
+        from datetime import timedelta  # noqa: PLC0415
+
+        cutoff = datetime.now(UTC) - timedelta(days=stale_days)
+        stale_threshold = cutoff.isoformat()
+
     by_type: dict[str, int] = {}
     by_scope: dict[str, int] = {}
     timestamps: list[str] = []
+    stale_count = 0
 
     page_size = 10_000
     offset = 0
     while offset < total:
-        rows = table.search().select(["type", "scope", "created_at"]).limit(page_size).offset(offset).to_list()
+        rows = (
+            table.search()
+            .select(["type", "scope", "created_at", "updated_at"])
+            .limit(page_size)
+            .offset(offset)
+            .to_list()
+        )
         if not rows:
             break
         for row in rows:
@@ -520,12 +610,14 @@ def memory_stats() -> dict:
             ts = row.get("created_at") or ""
             if ts:
                 timestamps.append(ts)
+            if stale_threshold and not row.get("updated_at") and ts and ts < stale_threshold:
+                stale_count += 1
         offset += len(rows)
 
     timestamps.sort()
     store_bytes = sum(f.stat().st_size for f in DB_PATH.rglob("*") if f.is_file()) if DB_PATH.exists() else 0
 
-    return {
+    result: dict = {
         "total": total,
         "by_type": by_type,
         "by_scope": by_scope,
@@ -533,3 +625,52 @@ def memory_stats() -> dict:
         "newest": timestamps[-1] if timestamps else "",
         "store_bytes": store_bytes,
     }
+    if stale_days > 0:
+        result["stale_count"] = stale_count
+    return result
+
+
+def purge_expired() -> int:
+    """Delete all memories whose ``expires_at`` timestamp is in the past.
+
+    Returns the number of memories deleted.
+    """
+    table = _get_table()
+    now = _escape_literal(datetime.now(UTC).isoformat())
+    before = table.count_rows()
+    table.delete(f"expires_at != '' AND expires_at <= '{now}'")
+    return before - table.count_rows()
+
+
+def reembed_all(batch_size: int = 64) -> dict:
+    """Re-embed all stored memories using the current embedding model.
+
+    Iterates the entire memory store in pages of *batch_size*, re-computes
+    embeddings with the currently configured model, and updates each row.
+    Use this after changing ``CONTEXTWELL_EMBED_MODEL`` to migrate all
+    existing memories to the new model.
+
+    **Note:** The total row count is captured once at the start of the
+    operation. Memories added by other writers during execution will not be
+    re-embedded in this run. To ensure complete coverage, avoid writing new
+    memories while ``reembed_all`` is running and re-run if needed.
+
+    Returns a dict with ``total`` (memories found at start) and
+    ``reembedded`` (updated count).
+    """
+    from contextwell.embedder import embed_batch  # noqa: PLC0415
+
+    table = _get_table()
+    rows = table.search().select(["id", "content"]).to_list()
+    total = len(rows)
+    reembedded = 0
+
+    for i in range(0, total, batch_size):
+        batch_rows = rows[i : i + batch_size]
+        contents = [str(row.get("content", "")) for row in batch_rows]
+        embeddings = embed_batch(contents)
+        for row, emb in zip(batch_rows, embeddings, strict=True):
+            table.update(where=f"id = '{_escape_literal(str(row['id']))}'", values={"embedding": emb})
+            reembedded += 1
+
+    return {"total": total, "reembedded": reembedded}

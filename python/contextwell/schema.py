@@ -24,3 +24,4 @@ class Memory:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     parent_ids: list[str] = field(default_factory=list)
     chunk_of: str = ""
+    expires_at: str = ""  # ISO 8601 datetime string; empty means no expiry.

@@ -13,7 +13,7 @@ import contextwell.embedder as embedder_module
 import contextwell.store as store_module
 from contextwell.bm25 import bm25_search
 from contextwell.embedder import _model_name, reset_model
-from contextwell.project import detect_project_id
+from contextwell.project import detect_project_id, detect_project_id_from_path
 from contextwell.schema import Memory
 from contextwell.store import (
     _embedding_dim,
@@ -21,6 +21,7 @@ from contextwell.store import (
     compress,
     find_cluster,
     forget,
+    purge_expired,
     recall,
     scan,
     store,
@@ -463,6 +464,7 @@ def test_dimension_mismatch_raises(tmp_path, monkeypatch) -> None:
 # Date range filtering tests
 # ---------------------------------------------------------------------------
 
+
 def test_since_filter_excludes_older(tmp_path, monkeypatch) -> None:
     """scan with since= excludes memories with older created_at."""
     from datetime import UTC, datetime  # noqa: PLC0415
@@ -544,14 +546,67 @@ def test_since_until_range(tmp_path, monkeypatch) -> None:
 
     results = scan(since="2025-01-01", until="2025-05-31")
     ids = {r["id"] for r in results}
-    assert memories[1].id in ids       # 2025-02-15 is in range
-    assert memories[0].id not in ids   # 2024-12-31 is before since
-    assert memories[2].id not in ids   # 2025-06-30 is after until
+    assert memories[1].id in ids  # 2025-02-15 is in range
+    assert memories[0].id not in ids  # 2024-12-31 is before since
+    assert memories[2].id not in ids  # 2025-06-30 is after until
+
+
+def test_scan_sorts_created_desc_and_id_asc_for_ties(tmp_path, monkeypatch) -> None:
+    """scan() sorts by created_at DESC and id ASC for deterministic ordering."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    shared_ts = datetime(2025, 5, 1, 12, 0, 0, tzinfo=UTC)
+    newer_ts = datetime(2025, 5, 2, 12, 0, 0, tzinfo=UTC)
+
+    tie_b = Memory(content="tie b", type="fact", scope="global")
+    tie_b.id = "bbbbbbbb-0000-0000-0000-000000000000"
+    tie_b.created_at = shared_ts
+    tie_b.embedding = _test_embed("tie b")
+    store(tie_b)
+
+    tie_a = Memory(content="tie a", type="fact", scope="global")
+    tie_a.id = "aaaaaaaa-0000-0000-0000-000000000000"
+    tie_a.created_at = shared_ts
+    tie_a.embedding = _test_embed("tie a")
+    store(tie_a)
+
+    newer = Memory(content="newer", type="fact", scope="global")
+    newer.id = "zzzzzzzz-0000-0000-0000-000000000000"
+    newer.created_at = newer_ts
+    newer.embedding = _test_embed("newer")
+    store(newer)
+
+    rows = scan(limit=10)
+    assert [row["id"] for row in rows] == [newer.id, tie_a.id, tie_b.id]
+
+
+def test_scalar_indexes_include_expires_at(tmp_path, monkeypatch) -> None:
+    """Store bootstrap creates a scalar index for expires_at filters."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    table = store_module._get_table()  # noqa: SLF001
+    indexed_columns = {column for index in table.list_indices() for column in index.columns}
+    assert "expires_at" in indexed_columns
+
+
+def test_recall_include_score_returns_normalized_score(tmp_path, monkeypatch) -> None:
+    """recall(include_score=True) includes scores in the 0-1 range."""
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    m = Memory(content="score test", type="fact", scope="global")
+    m.embedding = _test_embed(m.content)
+    store(m)
+
+    results = recall(_test_embed("score test"), query="score test", k=1, include_score=True)
+    assert len(results) == 1
+    assert "score" in results[0]
+    assert 0.0 <= results[0]["score"] <= 1.0
 
 
 # ---------------------------------------------------------------------------
 # find_cluster / compress tests
 # ---------------------------------------------------------------------------
+
 
 def test_find_cluster_returns_similar(tmp_path, monkeypatch) -> None:
     """find_cluster returns memories whose cosine similarity meets the threshold."""
@@ -654,6 +709,7 @@ def test_compress_too_few_returns_empty(tmp_path, monkeypatch) -> None:
 # Item 9: remember_batch tests
 # ---------------------------------------------------------------------------
 
+
 def _patch_embed_batch(monkeypatch) -> None:
     """Patch embed and embed_batch to use _test_embed (no model downloads)."""
     monkeypatch.setattr(
@@ -710,9 +766,7 @@ def test_remember_batch_skips_duplicates(tmp_path, monkeypatch) -> None:
     store(m)
 
     # Batch with the same content — should be skipped
-    result = server_module.remember_batch(
-        [{"content": "original", "scope": "global"}]
-    )
+    result = server_module.remember_batch([{"content": "original", "scope": "global"}])
     assert "skipped" in result
     # Row count should still be 1
     assert len(scan(scope="global")) == 1
@@ -755,9 +809,24 @@ def test_remember_batch_skips_empty_content(tmp_path, monkeypatch) -> None:
     assert any(r["content"] == "valid item" for r in rows)
 
 
+def test_remember_batch_reports_one_based_validation_index(tmp_path, monkeypatch) -> None:
+    """remember_batch validation errors report 1-based item numbers."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    result = server_module.remember_batch(
+        [
+            {"content": "ok", "scope": "global"},
+            {"content": "bad", "scope": "global", "expires_at": "not-an-iso-datetime"},
+        ]
+    )
+    assert result.startswith("Error in item 2:")
+
+
 # ---------------------------------------------------------------------------
 # Item 10: export_memories tests
 # ---------------------------------------------------------------------------
+
 
 def test_export_json(tmp_path, monkeypatch) -> None:
     """export_memories returns valid JSON with all expected fields."""
@@ -830,6 +899,7 @@ def test_export_writes_file(tmp_path, monkeypatch) -> None:
     assert "Exported 1" in result
     assert out_path.exists()
     import json as _json  # noqa: PLC0415
+
     data = _json.loads(out_path.read_text())
     assert data[0]["content"] == "file export test"
 
@@ -866,9 +936,105 @@ def test_export_respects_filters(tmp_path, monkeypatch) -> None:
     assert data[0]["type"] == "code"
 
 
+def test_remember_expires_at_normalizes_z_and_naive_to_utc(tmp_path, monkeypatch) -> None:
+    """remember() accepts Z/naive datetimes and stores canonical UTC strings."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    monkeypatch.setattr("contextwell.embedder.embed", _test_embed)
+
+    result_z = server_module.remember("ttl z", scope="global", expires_at="2026-12-31T23:59:59Z")
+    result_naive = server_module.remember("ttl naive", scope="global", expires_at="2026-12-30T01:02:03")
+    assert "Remembered" in result_z
+    assert "Remembered" in result_naive
+
+    rows = scan(limit=10)
+    by_content = {row["content"]: row for row in rows}
+    assert by_content["ttl z"]["expires_at"] == "2026-12-31T23:59:59+00:00"
+    assert by_content["ttl naive"]["expires_at"] == "2026-12-30T01:02:03+00:00"
+
+
+def test_expiry_filtering_and_purge_expired(tmp_path, monkeypatch) -> None:
+    """Expired memories are excluded from recall/scan and purge_expired deletes them."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    monkeypatch.setattr("contextwell.embedder.embed", _test_embed)
+
+    active = Memory(content="active ttl", type="fact", scope="global", expires_at="2099-01-01T00:00:00+00:00")
+    active.embedding = _test_embed(active.content)
+    store(active)
+    expired_1 = Memory(content="expired ttl 1", type="fact", scope="global", expires_at="2000-01-01T00:00:00+00:00")
+    expired_1.embedding = _test_embed(expired_1.content)
+    store(expired_1)
+    expired_2 = Memory(content="expired ttl 2", type="fact", scope="global", expires_at="2001-01-01T00:00:00+00:00")
+    expired_2.embedding = _test_embed(expired_2.content)
+    store(expired_2)
+
+    scanned_ids = {row["id"] for row in scan(limit=10)}
+    assert active.id in scanned_ids
+    assert expired_1.id not in scanned_ids
+    assert expired_2.id not in scanned_ids
+
+    recalled_ids = {row["id"] for row in recall(_test_embed("ttl"), query="ttl", k=10)}
+    assert active.id in recalled_ids
+    assert expired_1.id not in recalled_ids
+    assert expired_2.id not in recalled_ids
+
+    assert purge_expired() == 2
+    assert "Purged 0" in server_module.purge_expired()
+
+
+def test_reembed_all_reports_counts_and_updates_rows(tmp_path, monkeypatch) -> None:
+    """reembed_all returns counts and updates stored embeddings."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+
+    for content in ("first item", "second item"):
+        m = Memory(content=content, type="fact", scope="global")
+        m.embedding = _test_embed(content)
+        store(m)
+
+    new_embedding = [0.123] * _EMBEDDING_DIM
+    monkeypatch.setattr("contextwell.embedder.embed_batch", lambda texts: [new_embedding for _ in texts])
+
+    stats = server_module.reembed_all(batch_size=1)
+    assert stats == {"total": 2, "reembedded": 2}
+
+    rows = store_module._get_table().search().select(["embedding"]).to_list()  # noqa: SLF001
+    assert all(abs(float(row["embedding"][0]) - 0.123) < 1e-4 for row in rows)
+
+
+def test_scope_path_wires_project_scoping_without_git(tmp_path, monkeypatch) -> None:
+    """remember/list_memories respect scope_path for project scoping in non-git dirs."""
+    import contextwell.server as server_module  # noqa: PLC0415
+
+    monkeypatch.setattr(store_module, "DB_PATH", tmp_path / "memories")
+    monkeypatch.setattr("contextwell.embedder.embed", _test_embed)
+
+    project_root = tmp_path / "no-git-project"
+    project_root.mkdir()
+    other_root = tmp_path / "other-project"
+    other_root.mkdir()
+
+    remember_result = server_module.remember("scoped memory", scope="project", scope_path=str(project_root))
+    assert "Remembered" in remember_result
+
+    expected_pid = detect_project_id_from_path(str(project_root))
+    scoped_rows = server_module.list_memories(scope="project", scope_path=str(project_root))
+    assert len(scoped_rows) == 1
+    assert scoped_rows[0]["project_id"] == expected_pid
+    assert scoped_rows[0]["scope"] == "project"
+
+    other_rows = server_module.list_memories(scope="project", scope_path=str(other_root))
+    assert other_rows == []
+
+
 # ---------------------------------------------------------------------------
 # Item 11: cross-encoder reranking tests
 # ---------------------------------------------------------------------------
+
 
 class _MockCrossEncoder:
     """Deterministic mock: scores by reverse position in the input list."""
@@ -1019,6 +1185,7 @@ def test_recall_rerank_false_unchanged(tmp_path, monkeypatch) -> None:
 # Item 12: chunking tests
 # ---------------------------------------------------------------------------
 
+
 def test_chunk_text_short_passthrough() -> None:
     """chunk_text returns a single-element list for short content."""
     from contextwell.chunker import chunk_text  # noqa: PLC0415
@@ -1154,6 +1321,7 @@ def test_dedup_chunks_in_recall(tmp_path, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # Item 13: memory_stats tests
 # ---------------------------------------------------------------------------
+
 
 def test_memory_stats_empty(tmp_path, monkeypatch) -> None:
     """memory_stats on an empty store returns zero totals."""
@@ -1308,3 +1476,35 @@ def test_export_filter_fields_uses_list_defaults() -> None:
     row = _filter_fields({"id": "x", "content": "c"})
     assert row["tags"] == []
     assert row["parent_ids"] == []
+
+
+def test_file_import_org_no_headlines_respects_default_type(tmp_path) -> None:
+    """Org files without headlines keep the caller-provided default_type."""
+    from contextwell.file_import import parse as parse_file  # noqa: PLC0415
+
+    org_file = tmp_path / "plain.org"
+    org_file.write_text("just plain org text without headlines", encoding="utf-8")
+    chunks = parse_file(org_file, default_type="todo")
+
+    assert len(chunks) == 1
+    assert chunks[0].type == "todo"
+
+
+def test_file_import_source_single_definition_keeps_definition_boundary(tmp_path) -> None:
+    """A single definition is chunked as one definition section plus optional preamble."""
+    from contextwell.file_import import parse as parse_file  # noqa: PLC0415
+
+    source_file = tmp_path / "single_def.py"
+    source_file.write_text(
+        "import os\n\n\n"
+        "def only_one() -> int:\n"
+        "    a = 1\n"
+        "    b = 2\n"
+        "    return a + b\n",
+        encoding="utf-8",
+    )
+
+    chunks = parse_file(source_file)
+    assert len(chunks) == 2
+    assert chunks[0].content.startswith("import os")
+    assert chunks[1].content.startswith("def only_one")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastmcp import FastMCP
@@ -22,17 +23,60 @@ mcp = FastMCP(
 )
 
 
-def _project_id_for_scope(scope: str, cwd: str | None = None, *, allow_source_hint: bool = False) -> str | None:
-    """Resolve project_id for project scope, or None for non-project scopes."""
+def _normalize_expires_at(expires_at: str) -> str:
+    """Return *expires_at* normalized to a timezone-aware UTC ISO 8601 string."""
+    value = expires_at.strip()
+    if not value:
+        return ""
+    if value.endswith("Z"):
+        value = f"{value[:-1]}+00:00"
+    dt = datetime.fromisoformat(value)
+    dt = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+    return dt.isoformat()
+
+
+def _validate_expires_at(expires_at: str) -> str | None:
+    """Return an error message if *expires_at* is not a valid ISO 8601 datetime, else None."""
+    if not expires_at:
+        return None
+    try:
+        _normalize_expires_at(expires_at)
+    except ValueError:
+        return (
+            "expires_at must be a valid ISO 8601 datetime "
+            "(e.g. '2026-12-31T23:59:59Z' or '2026-12-31T23:59:59+00:00'), "
+            f"got: {expires_at!r}"
+        )
+    else:
+        return None
+
+
+def _project_id_for_scope(
+    scope: str,
+    cwd: str | None = None,
+    *,
+    allow_source_hint: bool = False,
+    scope_path: str = "",
+) -> str | None:
+    """Resolve project_id for project scope, or None for non-project scopes.
+
+    When *scope_path* is provided and *scope* is ``'project'``, the project ID
+    is derived directly from that path — no git repository is required.
+    """
     if scope != "project":
         return None
+    if scope_path:
+        from contextwell.project import detect_project_id_from_path  # noqa: PLC0415
+
+        return detect_project_id_from_path(scope_path)
+
     from contextwell.project import detect_project_id  # noqa: PLC0415
 
     project_id = detect_project_id(cwd)
     if not project_id:
         msg = "Unable to detect project context for scope='project'. Run from a git repository."
         if allow_source_hint:
-            msg += " You can also pass source='cwd:<path>'."
+            msg += " You can also pass source='cwd:<path>' or scope_path='<directory>'."
         raise ValueError(msg)
     return project_id
 
@@ -45,6 +89,8 @@ def remember(
     tags: list[str] | None = None,
     source: str = "",
     allow_duplicate: bool = False,
+    expires_at: str = "",
+    scope_path: str = "",
 ) -> str:
     """Store a new memory.
 
@@ -64,10 +110,21 @@ def remember(
                 the working directory used for git root detection, e.g.
                 'cwd:D:/myproject'. Otherwise the server CWD is used.
         allow_duplicate: Skip the near-duplicate check and store regardless.
+        expires_at: Optional ISO 8601 datetime string after which this memory
+                    is silently excluded from recall and listing. Empty means
+                    no expiry. Example: "2026-12-31T23:59:59Z".
+        scope_path: When scope='project', use this directory path as the
+                    project root instead of auto-detecting from git. Allows
+                    project-scoped memories in non-git directories.
     """
     from contextwell.chunker import chunk_text, chunking_enabled  # noqa: PLC0415
     from contextwell.embedder import embed, embed_batch  # noqa: PLC0415
     from contextwell.store import check_duplicate, store  # noqa: PLC0415
+
+    err = _validate_expires_at(expires_at)
+    if err:
+        return f"Error: {err}"
+    normalized_expires_at = _normalize_expires_at(expires_at) if expires_at else ""
 
     cwd: str | None = None
     clean_source: str | None = source or None
@@ -75,7 +132,7 @@ def remember(
         cwd, _, rest = source[4:].partition("|")
         clean_source = rest or None
 
-    project_id = _project_id_for_scope(scope, cwd, allow_source_hint=True)
+    project_id = _project_id_for_scope(scope, cwd, allow_source_hint=True, scope_path=scope_path)
     scope_label = f"project:{project_id[:8]}" if project_id else scope
 
     # --- Auto-chunking path ---
@@ -107,13 +164,13 @@ def remember(
                     tags=tags or [],
                     source=clean_source,
                     chunk_of=group_id,
+                    expires_at=normalized_expires_at,
                 )
                 m.embedding = emb
                 ids.append(store(m))
             return (
                 f"Chunked into {len(ids)} piece{'s' if len(ids) > 1 else ''} "
-                f"[{type}|{scope_label}] group:{group_id[:8]}: "
-                + ", ".join(f"#{mid[:8]}" for mid in ids)
+                f"[{type}|{scope_label}] group:{group_id[:8]}: " + ", ".join(f"#{mid[:8]}" for mid in ids)
             )
 
     # --- Normal (single-memory) path ---
@@ -137,6 +194,7 @@ def remember(
         project_id=project_id,
         tags=tags or [],
         source=clean_source,
+        expires_at=normalized_expires_at,
     )
     memory.embedding = embedding
     memory_id = store(memory)
@@ -144,13 +202,17 @@ def remember(
 
 
 @mcp.tool
-def recall(
+def recall(  # noqa: PLR0913
     query: str,
     scope: Literal["project", "global", ""] = "",
     type: MemoryType | Literal[""] = "",  # noqa: A002
     tags: list[str] | None = None,
     k: int = 10,
     rerank: bool = False,
+    since: str = "",
+    until: str = "",
+    include_score: bool = False,
+    scope_path: str = "",
 ) -> list[dict]:
     """Search memories by meaning using semantic similarity.
 
@@ -165,12 +227,21 @@ def recall(
                 cross-encoder (cross-encoder/ms-marco-MiniLM-L-6-v2) for
                 higher-precision ordering. Adds ~100-300 ms latency.
                 Most beneficial when k > 5.
+        since: ISO 8601 lower bound for created_at (inclusive).
+               Examples: "2025-01-01", "2025-03-15T09:00:00".
+        until: ISO 8601 upper bound for created_at (inclusive).
+               Examples: "2025-03-31", "2025-03-31T23:59:59".
+        include_score: When True, each result includes a ``"score"`` key
+                       with the cosine similarity (0-1) for dense search, or
+                       the RRF score for hybrid search.
+        scope_path: When scope='project', derive the project ID from this
+                    directory path instead of auto-detecting from git.
     """
     from contextwell.embedder import embed  # noqa: PLC0415
     from contextwell.store import recall as _recall  # noqa: PLC0415
 
     embedding = embed(query)
-    project_id = _project_id_for_scope(scope) or ""
+    project_id = _project_id_for_scope(scope, scope_path=scope_path) or ""
     return _recall(
         embedding,
         query=query,
@@ -180,6 +251,9 @@ def recall(
         tags=tags,
         k=k,
         rerank=rerank,
+        since=since,
+        until=until,
+        include_score=include_score,
     )
 
 
@@ -206,6 +280,7 @@ def list_memories(
     limit: int = 50,
     since: str = "",
     until: str = "",
+    scope_path: str = "",
 ) -> list[dict]:
     """Browse stored memories with optional filters.
 
@@ -219,10 +294,12 @@ def list_memories(
                Examples: "2025-01-01", "2025-03-15T09:00:00".
         until: ISO 8601 date/datetime upper bound for created_at (inclusive).
                Examples: "2025-03-31", "2025-03-31T23:59:59".
+        scope_path: When scope='project', derive the project ID from this
+                    directory path instead of auto-detecting from git.
     """
     from contextwell.store import scan  # noqa: PLC0415
 
-    project_id = _project_id_for_scope(scope) or ""
+    project_id = _project_id_for_scope(scope, scope_path=scope_path) or ""
     return scan(
         scope=scope,
         memory_type=type,
@@ -286,15 +363,19 @@ def remember_file(
     tags: list[str] | None = None,
     type_hint: MemoryType = "fact",
     source: str = "",
+    scope_path: str = "",
 ) -> str:
-    """Ingest a markdown file and store its sections as individual memories.
+    """Ingest a file and store its sections as individual memories.
 
-    Splits on ## / ### headers (each section becomes one memory). Falls back to
-    paragraph-based chunking (~800 chars) for files without headers. YAML
-    front-matter (---) sets default type, tags, and scope for the whole file.
+    Supported file types:
+    - Markdown (``.md``): splits on ## / ### headers (YAML front-matter supported).
+    - Org-mode (``.org``): splits on ``*``/``**``/``***`` headlines.
+    - Plain text (``.txt``): paragraph-based chunking (~800 chars).
+    - Source code (``.py``, ``.rs``, ``.go``, ``.js``, ``.ts``, etc.): regex
+      function/class detection with size-based fallback.
 
     Args:
-        path: Absolute or relative path to the markdown file to import.
+        path: Absolute or relative path to the file to import.
         scope: 'project' (tied to current git repo) or 'global'.
                For project scope, prefix source with 'cwd:<path>' to set
                the working directory used for git root detection.
@@ -304,9 +385,12 @@ def remember_file(
                    detected automatically.
         source: Optional origin hint. Supports 'cwd:<path>' prefix (same as
                 remember) to set the working directory for project-scope detection.
+        scope_path: When scope='project', derive the project ID from this
+                    directory path instead of auto-detecting from git.
     """
+    from pathlib import Path as _Path  # noqa: PLC0415
+
     from contextwell.embedder import embed  # noqa: PLC0415
-    from contextwell.markdown_import import parse  # noqa: PLC0415
     from contextwell.store import store  # noqa: PLC0415
 
     cwd: str | None = None
@@ -314,10 +398,18 @@ def remember_file(
         cwd, _, source = source[4:].partition("|")
         source = source or ""
 
-    project_id = _project_id_for_scope(scope, cwd, allow_source_hint=True)
+    project_id = _project_id_for_scope(scope, cwd, allow_source_hint=True, scope_path=scope_path)
 
+    suffix = _Path(path).suffix.lower()
     try:
-        chunks = parse(path, default_tags=tags or [], default_type=type_hint)
+        if suffix == ".md":
+            from contextwell.markdown_import import parse  # noqa: PLC0415
+
+            chunks = parse(path, default_tags=tags or [], default_type=type_hint)
+        else:
+            from contextwell.file_import import parse as _parse  # noqa: PLC0415
+
+            chunks = _parse(path, default_tags=tags or [], default_type=type_hint)
     except (OSError, ValueError) as exc:
         return f"Error reading file: {exc}"
 
@@ -356,6 +448,8 @@ def remember_batch(
     - ``tags`` (list[str], default []): Labels for filtering.
     - ``source`` (str, default ""): Origin reference. Supports the
       ``cwd:<path>`` prefix for project-scope CWD resolution.
+    - ``expires_at`` (str, default ""): Optional ISO 8601 expiry datetime.
+    - ``scope_path`` (str, default ""): Non-git project directory override.
 
     All embeddings are computed in one batched model call, making this
     significantly faster than calling ``remember`` N times for large sets.
@@ -376,7 +470,7 @@ def remember_batch(
 
     # Parse and normalise each item before hitting the model.
     parsed: list[dict] = []
-    for raw in memories:
+    for index, raw in enumerate(memories, start=1):
         content = str(raw.get("content", "")).strip()
         if not content:
             continue
@@ -387,6 +481,11 @@ def remember_batch(
             cwd, _, rest = source_raw[4:].partition("|")
             clean_source = rest or None
         scope: str = str(raw.get("scope", "global"))
+        scope_path_raw: str = str(raw.get("scope_path", ""))
+        expires_at_raw: str = str(raw.get("expires_at", ""))
+        err = _validate_expires_at(expires_at_raw)
+        if err:
+            return f"Error in item {index}: {err}"
         parsed.append(
             {
                 "content": content,
@@ -395,7 +494,9 @@ def remember_batch(
                 "tags": list(raw.get("tags") or []),
                 "source": clean_source,
                 "cwd": cwd,
-                "project_id": _project_id_for_scope(scope, cwd, allow_source_hint=True) or "",
+                "expires_at": _normalize_expires_at(expires_at_raw) if expires_at_raw else "",
+                "project_id": _project_id_for_scope(scope, cwd, allow_source_hint=True, scope_path=scope_path_raw)
+                or "",
             }
         )
 
@@ -421,6 +522,7 @@ def remember_batch(
             project_id=item["project_id"] or None,
             tags=item["tags"],
             source=item["source"],
+            expires_at=item["expires_at"] or "",
         )
         memory.embedding = embedding
         stored_ids.append(_store(memory))
@@ -443,6 +545,7 @@ def compress_memories(
     threshold: float = 0.85,
     tags: list[str] | None = None,
     source: str = "",
+    scope_path: str = "",
 ) -> str:
     """Compress semantically similar memories into a single summary memory.
 
@@ -464,11 +567,13 @@ def compress_memories(
                    the cluster. Default 0.85 is intentionally conservative.
         tags: Tags applied to the new summary memory.
         source: Optional source reference for the new summary memory.
+        scope_path: When scope='project', derive the project ID from this
+                    directory path instead of auto-detecting from git.
     """
     from contextwell.embedder import embed  # noqa: PLC0415
     from contextwell.store import compress as _compress  # noqa: PLC0415
 
-    project_id = _project_id_for_scope(scope) or ""
+    project_id = _project_id_for_scope(scope, scope_path=scope_path) or ""
     embedding = embed(summary)
     new_id, compressed_ids = _compress(
         summary_embedding=embedding,
@@ -488,14 +593,11 @@ def compress_memories(
     scope_label = f"project:{project_id[:8]}" if project_id else (scope or "global")
     n = len(compressed_ids)
     short_ids = ", ".join(f"#{mid[:8]}" for mid in compressed_ids)
-    return (
-        f"Compressed {n} memor{'y' if n == 1 else 'ies'} [{scope_label}] "
-        f"into #{new_id[:8]}. Replaced: {short_ids}."
-    )
+    return f"Compressed {n} memor{'y' if n == 1 else 'ies'} [{scope_label}] into #{new_id[:8]}. Replaced: {short_ids}."
 
 
 @mcp.tool
-def export_memories(
+def export_memories(  # noqa: PLR0913
     format: Literal["json", "markdown", "org"] = "json",  # noqa: A002
     scope: MemoryScope | Literal[""] = "",
     type: MemoryType | Literal[""] = "",  # noqa: A002
@@ -504,6 +606,7 @@ def export_memories(
     until: str = "",
     path: str = "",
     limit: int = 1000,
+    scope_path: str = "",
 ) -> str:
     """Export memories as JSON, Markdown, or Org-mode.
 
@@ -525,11 +628,13 @@ def export_memories(
         path: File path to write the export to. When empty, the content is
               returned as a string.
         limit: Maximum number of memories to export (default 1000).
+        scope_path: When scope='project', derive the project ID from this
+                    directory path instead of auto-detecting from git.
     """
     from contextwell.export import to_json, to_markdown, to_org  # noqa: PLC0415
     from contextwell.store import scan  # noqa: PLC0415
 
-    project_id = _project_id_for_scope(scope) or ""
+    project_id = _project_id_for_scope(scope, scope_path=scope_path) or ""
     scope_label = f"project:{project_id[:8]}" if project_id else (scope or "all")
 
     rows = scan(
@@ -558,16 +663,13 @@ def export_memories(
         out = Path(path).expanduser()
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(content, encoding="utf-8")
-        return (
-            f"Exported {len(rows)} memor{'y' if len(rows) == 1 else 'ies'} "
-            f"as {format} to {out}."
-        )
+        return f"Exported {len(rows)} memor{'y' if len(rows) == 1 else 'ies'} as {format} to {out}."
 
     return content
 
 
 @mcp.tool
-def memory_stats() -> dict:
+def memory_stats(stale_days: int = 0) -> dict:
     """Return a dashboard summary of the memory store.
 
     Provides situational awareness: how many memories are stored, how they
@@ -581,10 +683,52 @@ def memory_stats() -> dict:
     - ``oldest``: ISO timestamp of the oldest memory (or ``""`` if empty)
     - ``newest``: ISO timestamp of the newest memory (or ``""`` if empty)
     - ``store_bytes``: disk usage in bytes of the LanceDB directory
+    - ``stale_count``: (only when stale_days > 0) memories never updated and
+      older than stale_days days
+
+    Args:
+        stale_days: When > 0, count memories that were never updated and have
+                    a created_at older than this many days.
     """
     from contextwell.store import memory_stats as _stats  # noqa: PLC0415
 
-    return _stats()
+    return _stats(stale_days=stale_days)
+
+
+@mcp.tool
+def purge_expired() -> str:
+    """Permanently delete all memories whose expiry datetime has passed.
+
+    Memories stored with an ``expires_at`` value (ISO 8601) that is now in
+    the past are removed from the store. Memories with no expiry are unaffected.
+
+    Returns a human-readable summary of how many memories were deleted.
+    """
+    from contextwell.store import purge_expired as _purge  # noqa: PLC0415
+
+    n = _purge()
+    return f"Purged {n} expired memor{'y' if n == 1 else 'ies'}."
+
+
+@mcp.tool
+def reembed_all(batch_size: int = 64) -> dict:
+    """Re-embed all stored memories with the currently configured model.
+
+    Use this after changing ``CONTEXTWELL_EMBED_MODEL`` to migrate existing
+    memories to the new embedding space. All stored memories are re-embedded
+    in batches and updated in-place; IDs and metadata are preserved.
+
+    Args:
+        batch_size: Number of memories to embed per batch (default 64).
+                    Reduce if you hit memory limits with large models.
+
+    Returns:
+        A dict with keys ``total`` (memories inspected) and ``reembedded``
+        (memories actually updated).
+    """
+    from contextwell.store import reembed_all as _reembed  # noqa: PLC0415
+
+    return _reembed(batch_size=batch_size)
 
 
 def run() -> None:

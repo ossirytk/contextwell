@@ -7,6 +7,17 @@ import subprocess
 from pathlib import Path
 
 
+def detect_project_id_from_path(path: str) -> str:
+    """Return a stable project ID derived from an arbitrary filesystem path.
+
+    No git repository is required. The ID is the first 16 hex characters of
+    the SHA-256 hash of the resolved absolute path, matching the format used
+    by :func:`detect_project_id`.
+    """
+    resolved = str(Path(path).resolve())
+    return hashlib.sha256(resolved.encode()).hexdigest()[:16]
+
+
 def detect_project_id(cwd: str | None = None) -> str | None:
     """Return a stable project ID derived from the git root of cwd.
 
