@@ -29,7 +29,11 @@ impl MemoryRecord {
     }
 
     fn __repr__(&self) -> String {
-        format!("MemoryRecord(id={:?}, score={:.4})", &self.id[..8.min(self.id.len())], self.score)
+        format!(
+            "MemoryRecord(id={:?}, score={:.4})",
+            &self.id[..8.min(self.id.len())],
+            self.score
+        )
     }
 }
 

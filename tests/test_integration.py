@@ -1496,11 +1496,7 @@ def test_file_import_source_single_definition_keeps_definition_boundary(tmp_path
 
     source_file = tmp_path / "single_def.py"
     source_file.write_text(
-        "import os\n\n\n"
-        "def only_one() -> int:\n"
-        "    a = 1\n"
-        "    b = 2\n"
-        "    return a + b\n",
+        "import os\n\n\ndef only_one() -> int:\n    a = 1\n    b = 2\n    return a + b\n",
         encoding="utf-8",
     )
 

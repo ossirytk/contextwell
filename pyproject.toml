@@ -6,8 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=3.2.0",
+    "authlib>=1.6.11",
+    "cryptography>=46.0.7",
     "lancedb==0.30.0",
     "sentence-transformers>=5.3.0",
+    "python-multipart>=0.0.27",
+    "urllib3>=2.7.0",
 ]
 
 [project.optional-dependencies]
@@ -19,6 +23,7 @@ contextwell = "contextwell.server:run"
 [dependency-groups]
 dev = [
     "maturin>=1.12.6",
+    "pip-audit>=2.0.0",
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
     "rank-bm25>=0.2.2",
@@ -110,4 +115,3 @@ omit = ["tests/*", "*/__pycache__/*"]
 [tool.coverage.report]
 skip_empty = true
 show_missing = true
-
